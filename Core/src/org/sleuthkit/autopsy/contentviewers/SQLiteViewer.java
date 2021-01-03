@@ -1,7 +1,7 @@
 /*
  * Autopsy Forensic Browser
  *
- * Copyright 2018 Basis Technology Corp.
+ * Copyright 2018-2019 Basis Technology Corp.
  * Contact: carrier <at> sleuthkit <dot> org
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -74,7 +74,7 @@ class SQLiteViewer extends javax.swing.JPanel implements FileTypeViewer {
     /**
      * Constructs a file content viewer for SQLite database files.
      */
-    public SQLiteViewer() {
+    SQLiteViewer() {
         initComponents();
         jTableDataPanel.add(selectedTableView, BorderLayout.CENTER);
     }
@@ -413,8 +413,8 @@ class SQLiteViewer extends javax.swing.JPanel implements FileTypeViewer {
                 currentTableHeader = new ArrayList<>();
                 viewReader.read(tableName);
                 Map<String, Object> columnRow = new LinkedHashMap<>();
-                for(int i = 0; i< currentTableHeader.size(); i++){
-                  columnRow.put(currentTableHeader.get(i), "");
+                for (int i = 0; i < currentTableHeader.size(); i++) {
+                    columnRow.put(currentTableHeader.get(i), "");
                 }
                 selectedTableView.setupTable(Collections.singletonList(columnRow));
             }
@@ -544,19 +544,19 @@ class SQLiteViewer extends javax.swing.JPanel implements FileTypeViewer {
             @Override
             public void accept(String columnName) {
                 columnIndex++;
-
+                String csvString = columnName;
                 //Format the value to adhere to the format of a CSV file
                 if (columnIndex == 1) {
-                    columnName = "\"" + columnName + "\"";
+                    csvString = "\"" + csvString + "\"";
                 } else {
-                    columnName = ",\"" + columnName + "\"";
+                    csvString = ",\"" + csvString + "\"";
                 }
                 if (columnIndex == totalColumnCount) {
-                    columnName += "\n";
+                    csvString += "\n";
                 }
 
                 try {
-                    out.write(columnName.getBytes());
+                    out.write(csvString.getBytes());
                 } catch (IOException ex) {
                     /*
                      * If we can no longer write to the output stream, toss a
@@ -613,8 +613,13 @@ class SQLiteViewer extends javax.swing.JPanel implements FileTypeViewer {
                      */
                     throw new RuntimeException(ex);
                 }
-                rowIndex = rowIndex % totalColumnCount;
+                rowIndex %= totalColumnCount;
             }
         };
+    }
+
+    @Override
+    public boolean isSupported(AbstractFile file) {
+        return true;
     }
 }

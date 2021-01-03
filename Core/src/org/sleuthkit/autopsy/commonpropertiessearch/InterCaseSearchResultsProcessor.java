@@ -1,7 +1,7 @@
 /*
  * Autopsy Forensic Browser
  *
- * Copyright 2018-2019 Basis Technology Corp.
+ * Copyright 2018-2020 Basis Technology Corp.
  * Contact: carrier <at> sleuthkit <dot> org
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,15 +29,16 @@ import java.util.HashSet;
 import java.util.Set;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeMap;
 import java.util.logging.Level;
+import java.util.stream.Collectors;
 import org.sleuthkit.autopsy.casemodule.Case;
 import org.sleuthkit.autopsy.centralrepository.datamodel.CorrelationAttributeInstance;
 import org.sleuthkit.autopsy.centralrepository.datamodel.CorrelationAttributeInstance.Type;
 import org.sleuthkit.autopsy.centralrepository.datamodel.CorrelationAttributeNormalizationException;
 import org.sleuthkit.autopsy.centralrepository.datamodel.CorrelationCase;
 import org.sleuthkit.autopsy.centralrepository.datamodel.CorrelationDataSource;
-import org.sleuthkit.autopsy.centralrepository.datamodel.EamDb;
-import org.sleuthkit.autopsy.centralrepository.datamodel.EamDbException;
+import org.sleuthkit.autopsy.centralrepository.datamodel.CentralRepoException;
 import org.sleuthkit.autopsy.centralrepository.datamodel.InstanceTableCallback;
 import org.sleuthkit.autopsy.commonpropertiessearch.AbstractCommonAttributeInstance.NODE_TYPE;
 import org.sleuthkit.autopsy.coreutils.Logger;
@@ -45,6 +46,7 @@ import org.sleuthkit.datamodel.CaseDbAccessManager;
 import org.sleuthkit.datamodel.TskData;
 import org.sleuthkit.datamodel.HashUtility;
 import org.sleuthkit.datamodel.TskCoreException;
+import org.sleuthkit.autopsy.centralrepository.datamodel.CentralRepository;
 
 /**
  * Used to process and return CorrelationCase values from the EamDB for
@@ -81,12 +83,12 @@ final class InterCaseSearchResultsProcessor {
         try {
 
             InterCaseCommonAttributeRowCallback instancetableCallback = new InterCaseCommonAttributeRowCallback();
-            EamDb dbManager = EamDb.getInstance();
+            CentralRepository dbManager = CentralRepository.getInstance();
             dbManager.processInstanceTableWhere(correlationType, String.format("id = %s", attrbuteId), instancetableCallback);
 
             return instancetableCallback.getCorrelationAttribute();
 
-        } catch (EamDbException ex) {
+        } catch (CentralRepoException ex) {
             LOGGER.log(Level.SEVERE, "Error accessing EamDb processing InstanceTable row.", ex);
         }
 
@@ -102,9 +104,9 @@ final class InterCaseSearchResultsProcessor {
      * @return the portion of a query which follows the SELECT keyword for
      *         finding MD5s which we are correlating on
      *
-     * @throws EamDbException
+     * @throws CentralRepoException
      */
-    private String getFileQuery(Set<String> mimeTypesToFilterOn) throws EamDbException {
+    private String getFileQuery(Set<String> mimeTypesToFilterOn) throws CentralRepoException {
         String query;
         query = "md5 AS value FROM tsk_files WHERE known!=" + TskData.FileKnown.KNOWN.getFileKnownValue() + " AND md5 IS NOT NULL"; //NON-NLS
         if (!mimeTypesToFilterOn.isEmpty()) {
@@ -127,7 +129,7 @@ final class InterCaseSearchResultsProcessor {
     Map<String, Map<String, CommonAttributeValueList>> findInterCaseValuesByCase(Case currentCase, Set<String> mimeTypesToFilterOn) {
         try {
 
-            EamDb dbManager = EamDb.getInstance();
+            CentralRepository dbManager = CentralRepository.getInstance();
             int caseId = dbManager.getCase(currentCase).getID();
             InterCaseByCaseCallback instancetableCallback = new InterCaseByCaseCallback(caseId);
             if (correlationType.getId() == CorrelationAttributeInstance.FILES_TYPE_ID) {
@@ -139,7 +141,7 @@ final class InterCaseSearchResultsProcessor {
             }
             return instancetableCallback.getInstanceCollatedCommonFiles();
 
-        } catch (EamDbException | TskCoreException ex) {
+        } catch (CentralRepoException | TskCoreException ex) {
             LOGGER.log(Level.SEVERE, "Error accessing EamDb processing CaseInstancesTable.", ex);
         }
         return new HashMap<>();
@@ -157,7 +159,7 @@ final class InterCaseSearchResultsProcessor {
     Map<Integer, CommonAttributeValueList> findInterCaseValuesByCount(Case currentCase, Set<String> mimeTypesToFilterOn) {
         try {
 
-            EamDb dbManager = EamDb.getInstance();
+            CentralRepository dbManager = CentralRepository.getInstance();
 
             int caseId = dbManager.getCase(currentCase).getID();
             InterCaseByCountCallback instancetableCallback = new InterCaseByCountCallback(caseId);
@@ -170,10 +172,10 @@ final class InterCaseSearchResultsProcessor {
             }
             return instancetableCallback.getInstanceCollatedCommonFiles();
 
-        } catch (EamDbException | TskCoreException ex) {
+        } catch (CentralRepoException | TskCoreException ex) {
             LOGGER.log(Level.SEVERE, "Error accessing EamDb processing CaseInstancesTable.", ex);
         }
-        return new HashMap<>();
+        return new TreeMap<>();
     }
 
     /**
@@ -190,7 +192,7 @@ final class InterCaseSearchResultsProcessor {
      */
     Map<Integer, CommonAttributeValueList> findSingleInterCaseValuesByCount(Case currentCase, Set<String> mimeTypesToFilterOn, CorrelationCase singleCase) {
         try {
-            EamDb dbManager = EamDb.getInstance();
+            CentralRepository dbManager = CentralRepository.getInstance();
             int caseId = dbManager.getCase(currentCase).getID();
             int targetCaseId = singleCase.getID();
             InterCaseByCountCallback instancetableCallback = new InterCaseByCountCallback(caseId, targetCaseId);
@@ -202,10 +204,10 @@ final class InterCaseSearchResultsProcessor {
                         instancetableCallback);
             }
             return instancetableCallback.getInstanceCollatedCommonFiles();
-        } catch (EamDbException | TskCoreException ex) {
+        } catch (CentralRepoException | TskCoreException ex) {
             LOGGER.log(Level.SEVERE, "Error accessing EamDb processing CaseInstancesTable.", ex);
         }
-        return new HashMap<>();
+        return new TreeMap<>();
     }
 
     /**
@@ -224,7 +226,7 @@ final class InterCaseSearchResultsProcessor {
     Map<String, Map<String, CommonAttributeValueList>> findSingleInterCaseValuesByCase(Case currentCase, Set<String> mimeTypesToFilterOn, CorrelationCase singleCase) {
         try {
 
-            EamDb dbManager = EamDb.getInstance();
+            CentralRepository dbManager = CentralRepository.getInstance();
             int caseId = dbManager.getCase(currentCase).getID();
             int targetCaseId = singleCase.getID();
             InterCaseByCaseCallback instancetableCallback = new InterCaseByCaseCallback(caseId, targetCaseId);
@@ -236,7 +238,7 @@ final class InterCaseSearchResultsProcessor {
                         instancetableCallback);
             }
             return instancetableCallback.getInstanceCollatedCommonFiles();
-        } catch (EamDbException | TskCoreException ex) {
+        } catch (CentralRepoException | TskCoreException ex) {
             LOGGER.log(Level.SEVERE, "Error accessing EamDb processing CaseInstancesTable.", ex);
         }
         return new HashMap<>();
@@ -248,7 +250,7 @@ final class InterCaseSearchResultsProcessor {
      */
     private class InterCaseByCountCallback implements CaseDbAccessManager.CaseDbAccessQueryCallback, InstanceTableCallback {
 
-        private final Map<Integer, CommonAttributeValueList> instanceCollatedCommonFiles = new HashMap<>();
+        private final TreeMap<Integer, CommonAttributeValueList> instanceCollatedCommonFiles = new TreeMap<>();
         private final int caseID;
         private final int targetCase;
 
@@ -280,11 +282,11 @@ final class InterCaseSearchResultsProcessor {
                 for (String corValue : values) {
                     List<CorrelationAttributeInstance> instances;
                     if (targetCases.isEmpty()) {
-                        instances = EamDb.getInstance().getArtifactInstancesByTypeValues(correlationType, Arrays.asList(corValue));
+                        instances = CentralRepository.getInstance().getArtifactInstancesByTypeValues(correlationType, Arrays.asList(corValue));
                     } else {
-                        instances = EamDb.getInstance().getArtifactInstancesByTypeValuesAndCases(correlationType, Arrays.asList(corValue), targetCases);
+                        instances = CentralRepository.getInstance().getArtifactInstancesByTypeValuesAndCases(correlationType, Arrays.asList(corValue), targetCases);
                     }
-                    int size = instances.size();
+                    int size = instances.stream().map(instance -> instance.getCorrelationDataSource().getID()).collect(Collectors.toSet()).size();
                     if (size > 1) {
                         CommonAttributeValue commonAttributeValue = new CommonAttributeValue(corValue);
                         boolean anotherCase = false;
@@ -305,13 +307,13 @@ final class InterCaseSearchResultsProcessor {
                         }
                     }
                 }
-            } catch (SQLException | EamDbException | CorrelationAttributeNormalizationException ex) {
+            } catch (SQLException | CentralRepoException | CorrelationAttributeNormalizationException ex) {
                 LOGGER.log(Level.WARNING, "Error getting artifact instances from database.", ex); // NON-NLS
             }
         }
 
         Map<Integer, CommonAttributeValueList> getInstanceCollatedCommonFiles() {
-            return Collections.unmodifiableMap(instanceCollatedCommonFiles);
+            return Collections.unmodifiableSortedMap(instanceCollatedCommonFiles);
         }
     }
 
@@ -354,9 +356,9 @@ final class InterCaseSearchResultsProcessor {
                 for (List<String> valuesChunk : Iterables.partition(values, VALUE_BATCH_SIZE)) {
                     List<CorrelationAttributeInstance> instances;
                     if (targetCases.isEmpty()) {
-                        instances = EamDb.getInstance().getArtifactInstancesByTypeValues(correlationType, valuesChunk);
+                        instances = CentralRepository.getInstance().getArtifactInstancesByTypeValues(correlationType, valuesChunk);
                     } else {
-                        instances = EamDb.getInstance().getArtifactInstancesByTypeValuesAndCases(correlationType, valuesChunk, targetCases);
+                        instances = CentralRepository.getInstance().getArtifactInstancesByTypeValuesAndCases(correlationType, valuesChunk, targetCases);
                     }
                     if (instances.size() > 1) {
                         for (CorrelationAttributeInstance instance : instances) {
@@ -383,7 +385,7 @@ final class InterCaseSearchResultsProcessor {
                         }
                     }
                 }
-            } catch (EamDbException | SQLException | CorrelationAttributeNormalizationException ex) {
+            } catch (CentralRepoException | SQLException | CorrelationAttributeNormalizationException ex) {
                 LOGGER.log(Level.WARNING, "Error getting artifact instances from database.", ex); // NON-NLS
             }
         }
@@ -404,7 +406,7 @@ final class InterCaseSearchResultsProcessor {
         @Override
         public void process(ResultSet resultSet) {
             try {
-                EamDb dbManager = EamDb.getInstance();
+                CentralRepository dbManager = CentralRepository.getInstance();
 
                 while (resultSet.next()) {
                     CorrelationCase correlationCase = dbManager.getCaseById(InstanceTableCallback.getCaseId(resultSet));
@@ -426,7 +428,7 @@ final class InterCaseSearchResultsProcessor {
                     }
 
                 }
-            } catch (SQLException | EamDbException ex) {
+            } catch (SQLException | CentralRepoException ex) {
                 LOGGER.log(Level.WARNING, "Error getting single correlation artifact instance from database.", ex); // NON-NLS
             }
         }

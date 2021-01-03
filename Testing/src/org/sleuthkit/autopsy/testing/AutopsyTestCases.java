@@ -1,7 +1,7 @@
 /*
  * Autopsy Forensic Browser
  *
- * Copyright 2011-2018 Basis Technology Corp.
+ * Copyright 2011-2020 Basis Technology Corp.
  * Contact: carrier <at> sleuthkit <dot> org
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,8 +31,8 @@ import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
 import java.util.Random;
-import java.util.logging.Level;
 import java.util.logging.Logger;
+import java.util.logging.Level;
 import javax.imageio.ImageIO;
 import javax.swing.JDialog;
 import javax.swing.text.JTextComponent;
@@ -66,7 +66,7 @@ import org.sleuthkit.datamodel.TskData;
 
 public class AutopsyTestCases {
 
-    private static final Logger logger = Logger.getLogger(AutopsyTestCases.class.getName());
+    private static final Logger logger = Logger.getLogger(AutopsyTestCases.class.getName()); // DO NOT USE AUTOPSY LOGGER
     private long start;
 
     /**
@@ -385,6 +385,12 @@ public class AutopsyTestCases {
             listOperator.clickOnItem(0, 1);
             jbo0.pushNoBlock();
             new Timeout("pausing", 2000).sleep();
+            
+            // Next button on the data source selection panel
+            JButtonOperator dataSourceSelectionPanelNext = new JButtonOperator(reportDialogOperator, "Next");
+            dataSourceSelectionPanelNext.pushNoBlock();
+            new Timeout("pausing", 2000).sleep();
+   
             JButtonOperator jbo1 = new JButtonOperator(reportDialogOperator, "Finish");
             jbo1.pushNoBlock();
             JDialog previewDialog = JDialogOperator.waitJDialog("Progress", false, false);
@@ -457,6 +463,9 @@ public class AutopsyTestCases {
         } catch (UserPreferencesException ex) {
             logger.log(Level.SEVERE, "Error saving messaging service connection info", ex); //NON-NLS
         }
+        
+        UserPreferences.setZkServerHost(System.getProperty("zooKeeperHost"));
+        UserPreferences.setZkServerPort(System.getProperty("zooKeeperPort"));
     }
 
     private void expandNodes(JTreeOperator jto, TreePath tp) {

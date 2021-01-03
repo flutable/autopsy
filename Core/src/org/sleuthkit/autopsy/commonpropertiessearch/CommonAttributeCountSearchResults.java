@@ -25,12 +25,13 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.TreeMap;
 import java.util.logging.Level;
 import org.sleuthkit.autopsy.centralrepository.datamodel.CorrelationAttributeInstance;
 import org.sleuthkit.autopsy.centralrepository.datamodel.CorrelationAttributeNormalizationException;
-import org.sleuthkit.autopsy.centralrepository.datamodel.EamDb;
-import org.sleuthkit.autopsy.centralrepository.datamodel.EamDbException;
+import org.sleuthkit.autopsy.centralrepository.datamodel.CentralRepoException;
 import org.sleuthkit.autopsy.coreutils.Logger;
+import org.sleuthkit.autopsy.centralrepository.datamodel.CentralRepository;
 
 /**
  * Stores the results from the various types of common attribute searching
@@ -58,7 +59,7 @@ final public class CommonAttributeCountSearchResults {
      */
     CommonAttributeCountSearchResults(Map<Integer, CommonAttributeValueList> metadata, int percentageThreshold, CorrelationAttributeInstance.Type resultType) {
         //wrap in a new object in case any client code has used an unmodifiable collection
-        this.instanceCountToAttributeValues = new HashMap<>(metadata);
+        this.instanceCountToAttributeValues = new TreeMap<>(metadata);
         this.percentageThreshold = percentageThreshold;
         this.resultTypeId = resultType.getId();
     }
@@ -73,7 +74,7 @@ final public class CommonAttributeCountSearchResults {
      */
     CommonAttributeCountSearchResults(Map<Integer, CommonAttributeValueList> metadata, int percentageThreshold) {
         //wrap in a new object in case any client code has used an unmodifiable collection
-        this.instanceCountToAttributeValues = new HashMap<>(metadata);
+        this.instanceCountToAttributeValues = new TreeMap<>(metadata);
         this.percentageThreshold = percentageThreshold;
         this.resultTypeId = CorrelationAttributeInstance.FILES_TYPE_ID;
     }
@@ -106,9 +107,9 @@ final public class CommonAttributeCountSearchResults {
     /**
      * Filter the results based on the criteria the user specified
      *
-     * @throws EamDbException
+     * @throws CentralRepoException
      */
-    public void filterMetadata() throws EamDbException {
+    public void filterMetadata() throws CentralRepoException {
         filterMetadata(this.percentageThreshold);
     }
 
@@ -122,19 +123,18 @@ final public class CommonAttributeCountSearchResults {
      *
      * @return metadata
      */
-    private void filterMetadata(int maximumPercentageThreshold) throws EamDbException {
-        if (!EamDb.isEnabled()) {
+    private void filterMetadata(int maximumPercentageThreshold) throws CentralRepoException {
+        if (!CentralRepository.isEnabled()) {
             return;
         }
 
-        CorrelationAttributeInstance.Type attributeType = CorrelationAttributeInstance
-                .getDefaultCorrelationTypes()
+        CentralRepository eamDb = CentralRepository.getInstance();
+        CorrelationAttributeInstance.Type attributeType = eamDb.getDefinedCorrelationTypes()
                 .stream()
                 .filter(filterType -> filterType.getId() == this.resultTypeId)
                 .findFirst().get();
 
-        EamDb eamDb = EamDb.getInstance();
-
+        
         Map<Integer, List<CommonAttributeValue>> itemsToRemove = new HashMap<>();
         //Call countUniqueDataSources once to reduce the number of DB queries needed to get
         //the frequencyPercentage

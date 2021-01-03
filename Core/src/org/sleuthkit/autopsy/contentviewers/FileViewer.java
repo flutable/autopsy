@@ -18,7 +18,6 @@
  */
 package org.sleuthkit.autopsy.contentviewers;
 
-
 import com.google.common.base.Strings;
 import java.awt.Component;
 import java.util.HashMap;
@@ -50,7 +49,9 @@ public class FileViewer extends javax.swing.JPanel implements DataContentViewer 
         new SQLiteViewer(),
         new PListViewer(),
         new MediaFileViewer(),
-        new HtmlViewer()
+        new HtmlViewer(),
+        new WindowsRegistryViewer(),
+        new PDFViewer()
     };
 
     private FileTypeViewer lastViewer;
@@ -77,14 +78,19 @@ public class FileViewer extends javax.swing.JPanel implements DataContentViewer 
     }
 
     /**
-     * Get the FileTypeViewer for a given mimetype
+     * Get the FileTypeViewer for a given file
      *
-     * @param mimeType
+     * @param file
      *
-     * @return FileTypeViewer, null if no known content viewer supports the mimetype
+     * @return FileTypeViewer, null if no known content viewer supports the
+     *         file
      */
-    private FileTypeViewer getSupportingViewer(String mimeType) {
-        return  mimeTypeToViewerMap.get(mimeType);
+    private FileTypeViewer getSupportingViewer(AbstractFile file) {
+        FileTypeViewer viewer = mimeTypeToViewerMap.get(file.getMIMEType());
+        if (viewer == null || viewer.isSupported(file)) {
+            return viewer;
+        }
+        return null;
     }
 
     /**
@@ -102,18 +108,17 @@ public class FileViewer extends javax.swing.JPanel implements DataContentViewer 
 
     // Variables declaration - do not modify//GEN-BEGIN:variables
     // End of variables declaration//GEN-END:variables
-    
     @Override
     public void setNode(Node selectedNode) {
-        
+
         resetComponent();
-        
+
         if (selectedNode == null) {
             return;
         }
 
         AbstractFile file = selectedNode.getLookup().lookup(AbstractFile.class);
-        if (file == null) {
+        if ((file == null) || (file.isDir())) {
             return;
         }
 
@@ -123,27 +128,26 @@ public class FileViewer extends javax.swing.JPanel implements DataContentViewer 
             try {
                 FileTypeDetector fileTypeDetector = new FileTypeDetector();
                 mimeType = fileTypeDetector.getMIMEType(file);
-            }catch (FileTypeDetector.FileTypeDetectorInitException ex) {
+            } catch (FileTypeDetector.FileTypeDetectorInitException ex) {
                 LOGGER.log(Level.SEVERE, "Failed to initialize FileTypeDetector.", ex); //NON-NLS
                 return;
             }
         }
-        
+
         if (mimeType.equalsIgnoreCase("application/octet-stream")) {
             return;
-        } 
-        else {
-            FileTypeViewer viewer = getSupportingViewer(mimeType);
+        } else {
+            FileTypeViewer viewer = getSupportingViewer(file);
             if (viewer != null) {
                 lastViewer = viewer;
 
                 viewer.setFile(file);
                 this.removeAll();
                 this.add(viewer.getComponent());
-                this.repaint();
+                this.validate();
             }
         }
-       
+
     }
 
     @Override
@@ -186,7 +190,7 @@ public class FileViewer extends javax.swing.JPanel implements DataContentViewer 
         }
 
         AbstractFile aFile = node.getLookup().lookup(AbstractFile.class);
-        if (aFile == null) {
+        if ((aFile == null) || (aFile.isDir())) {
             return false;
         }
 
@@ -196,44 +200,44 @@ public class FileViewer extends javax.swing.JPanel implements DataContentViewer 
             try {
                 FileTypeDetector fileTypeDetector = new FileTypeDetector();
                 mimeType = fileTypeDetector.getMIMEType(aFile);
-            }catch (FileTypeDetector.FileTypeDetectorInitException ex) {
+            } catch (FileTypeDetector.FileTypeDetectorInitException ex) {
                 LOGGER.log(Level.SEVERE, "Failed to initialize FileTypeDetector.", ex); //NON-NLS
                 return false;
             }
         }
-        
+
         if (mimeType.equalsIgnoreCase("application/octet-stream")) {
             return false;
         } else {
-            return (getSupportingViewer(mimeType) != null);
+            return (getSupportingViewer(aFile) != null);
         }
-       
+
     }
 
     @Override
     public int isPreferred(Node node) {
         AbstractFile file = node.getLookup().lookup(AbstractFile.class);
         String mimeType = file.getMIMEType();
-        
+
         if (Strings.isNullOrEmpty(mimeType)) {
             LOGGER.log(Level.INFO, "Mimetype not known for file: {0}", file.getName()); //NON-NLS
             try {
                 FileTypeDetector fileTypeDetector = new FileTypeDetector();
                 mimeType = fileTypeDetector.getMIMEType(file);
-            }catch (FileTypeDetector.FileTypeDetectorInitException ex) {
+            } catch (FileTypeDetector.FileTypeDetectorInitException ex) {
                 LOGGER.log(Level.SEVERE, "Failed to initialize FileTypeDetector.", ex); //NON-NLS
                 return 0;
             }
         }
-        
+
         if (mimeType.equalsIgnoreCase("application/octet-stream")) {
             return 0;
         } else {
-            if (null != getSupportingViewer(mimeType)) {
+            if (null != getSupportingViewer(file)) {
                 return CONFIDENCE_LEVEL;
             }
         }
-        
+
         return 0;
     }
 }

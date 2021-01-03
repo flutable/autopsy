@@ -29,7 +29,7 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.openide.util.NbBundle;
 import org.sleuthkit.autopsy.casemodule.NoCurrentCaseException;
-import org.sleuthkit.autopsy.centralrepository.datamodel.EamDbException;
+import org.sleuthkit.autopsy.centralrepository.datamodel.CentralRepoException;
 import org.sleuthkit.datamodel.TskCoreException;
 
 /**
@@ -60,9 +60,9 @@ public abstract class AbstractCommonAttributeSearcher {
      * @throws TskCoreException
      * @throws NoCurrentCaseException
      * @throws SQLException
-     * @throws EamDbException
+     * @throws CentralRepoException
      */
-    public abstract CommonAttributeCountSearchResults findMatchesByCount() throws TskCoreException, NoCurrentCaseException, SQLException, EamDbException;
+    public abstract CommonAttributeCountSearchResults findMatchesByCount() throws TskCoreException, NoCurrentCaseException, SQLException, CentralRepoException;
 
     /**
      * Implement this to search for files with common attributes. Creates an
@@ -78,9 +78,9 @@ public abstract class AbstractCommonAttributeSearcher {
      * @throws TskCoreException
      * @throws NoCurrentCaseException
      * @throws SQLException
-     * @throws EamDbException
+     * @throws CentralRepoException
      */
-    public abstract CommonAttributeCaseSearchResults findMatchesByCase() throws TskCoreException, NoCurrentCaseException, SQLException, EamDbException;
+    public abstract CommonAttributeCaseSearchResults findMatchesByCase() throws TskCoreException, NoCurrentCaseException, SQLException, CentralRepoException;
 
     /**
      * Implement this to create a descriptive string for the tab which will
@@ -130,12 +130,12 @@ public abstract class AbstractCommonAttributeSearcher {
         }
     }
 
-    static Map<Integer, CommonAttributeValueList> collateMatchesByNumberOfInstances(Map<String, CommonAttributeValue> commonFiles) {
+    static TreeMap<Integer, CommonAttributeValueList> collateMatchesByNumberOfInstances(Map<String, CommonAttributeValue> commonFiles) {
         //collate matches by number of matching instances - doing this in sql doesnt seem efficient
-        Map<Integer, CommonAttributeValueList> instanceCollatedCommonFiles = new TreeMap<>();
+        TreeMap<Integer, CommonAttributeValueList> instanceCollatedCommonFiles = new TreeMap<>();
 
         for (CommonAttributeValue md5Metadata : commonFiles.values()) {
-            Integer size = md5Metadata.getInstanceCount();
+            Integer size = md5Metadata.getNumberOfDataSourcesInCurrentCase();
 
             if (instanceCollatedCommonFiles.containsKey(size)) {
                 instanceCollatedCommonFiles.get(size).addMetadataToList(md5Metadata);
@@ -186,9 +186,9 @@ public abstract class AbstractCommonAttributeSearcher {
      * when checkType is ONLY_TEXT_FILES. ".doc", ".docx", ".odt", ".xls",
      * ".xlsx", ".ppt", ".pptx" ".txt", ".rtf", ".log", ".text", ".xml" ".html",
      * ".htm", ".css", ".js", ".php", ".aspx" ".pdf"
+     * //ignore text/plain due to large number of results with that type 
      */
     static final Set<String> TEXT_FILES_MIME_TYPES = Stream.of(
-            "text/plain", //NON-NLS
             "application/rtf", //NON-NLS
             "application/pdf", //NON-NLS
             "text/css", //NON-NLS

@@ -72,7 +72,7 @@ public class NextUnseenGroup extends Action {
         groupManager = controller.getGroupManager();
         
         // Get reference to the list of unseen groups, that GroupManager will continue to manage
-        unSeenGroups = groupManager.getUnSeenGroups();
+        unSeenGroups = groupManager.getUnSeenGroupsForCurrentGroupBy();
         unSeenGroups.addListener((Observable observable) -> unSeenGroupListener());
         controller.viewStateProperty().addListener((Observable observable) -> updateButton());
 
@@ -88,7 +88,7 @@ public class NextUnseenGroup extends Action {
                 if (group.isPresent()) {
                     // NOTE: We need to wait for current group to be marked as seen because the 'advance' 
                     // method grabs the top of the unseen list
-                    groupManager.markGroupSeen(group.get(), true)
+                    groupManager.markGroupSeen(group.get())
                         .addListener(this::advanceToNextUnseenGroup, MoreExecutors.newDirectExecutorService());
                     return;
                 }

@@ -2,7 +2,7 @@
  *
  * Autopsy Forensic Browser
  *
- * Copyright 2018 Basis Technology Corp.
+ * Copyright 2018-2020 Basis Technology Corp.
  * Contact: carrier <at> sleuthkit <dot> org
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,16 +21,19 @@ package org.sleuthkit.autopsy.commonpropertiessearch;
 
 import org.sleuthkit.autopsy.guiutils.DataSourceComboBoxModel;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Observable;
 import java.util.Observer;
+import java.util.logging.Level;
 import javax.swing.ComboBoxModel;
-import org.openide.util.Exceptions;
 import org.sleuthkit.autopsy.centralrepository.datamodel.CorrelationAttributeInstance;
-import org.sleuthkit.autopsy.centralrepository.datamodel.EamDbException;
+import org.sleuthkit.autopsy.centralrepository.datamodel.CentralRepoException;
+import org.sleuthkit.autopsy.centralrepository.datamodel.CentralRepository;
+import org.sleuthkit.autopsy.coreutils.Logger;
 
 /**
  * UI controls for Common Files Search scenario where the user intends to find
@@ -38,6 +41,7 @@ import org.sleuthkit.autopsy.centralrepository.datamodel.EamDbException;
  */
 public final class InterCasePanel extends javax.swing.JPanel {
 
+    private final static Logger logger = Logger.getLogger(InterCasePanel.class.getName());
     private static final long serialVersionUID = 1L;
     private final Observable fileTypeFilterObservable;
     static final int NO_CASE_SELECTED = -1;
@@ -115,13 +119,20 @@ public final class InterCasePanel extends javax.swing.JPanel {
     void setupCorrelationTypeFilter() {
         this.correlationTypeFilters = new HashMap<>();
         try {
-            List<CorrelationAttributeInstance.Type> types = CorrelationAttributeInstance.getDefaultCorrelationTypes();
+            List<CorrelationAttributeInstance.Type> types = CentralRepository.getInstance().getDefinedCorrelationTypes();
+            Collections.sort(types, new Comparator<CorrelationAttributeInstance.Type>() {
+                //The types should be sorted so that the File type is the first item in the combo box.
+                @Override
+                public int compare(CorrelationAttributeInstance.Type type1, CorrelationAttributeInstance.Type type2) {
+                    return Integer.compare(type1.getId(), type2.getId());
+                }
+            });
             for (CorrelationAttributeInstance.Type type : types) {
                 correlationTypeFilters.put(type.getDisplayName(), type);
                 this.correlationTypeComboBox.addItem(type.getDisplayName());
             }
-        } catch (EamDbException ex) {
-            Exceptions.printStackTrace(ex);
+        } catch (CentralRepoException ex) {
+            logger.log(Level.WARNING, "Error getting correlation types", ex);
         }
         this.correlationTypeComboBox.setSelectedIndex(0);
     }
@@ -164,7 +175,6 @@ public final class InterCasePanel extends javax.swing.JPanel {
         categoriesLabel.setName(""); // NOI18N
 
         buttonGroup.add(allFileCategoriesRadioButton);
-        allFileCategoriesRadioButton.setSelected(true);
         org.openide.awt.Mnemonics.setLocalizedText(allFileCategoriesRadioButton, org.openide.util.NbBundle.getMessage(InterCasePanel.class, "InterCasePanel.allFileCategoriesRadioButton.text")); // NOI18N
         allFileCategoriesRadioButton.setToolTipText(org.openide.util.NbBundle.getMessage(InterCasePanel.class, "InterCasePanel.allFileCategoriesRadioButton.toolTipText")); // NOI18N
         allFileCategoriesRadioButton.setEnabled(false);
@@ -175,6 +185,7 @@ public final class InterCasePanel extends javax.swing.JPanel {
         });
 
         buttonGroup.add(selectedFileCategoriesButton);
+        selectedFileCategoriesButton.setSelected(true);
         org.openide.awt.Mnemonics.setLocalizedText(selectedFileCategoriesButton, org.openide.util.NbBundle.getMessage(InterCasePanel.class, "InterCasePanel.selectedFileCategoriesButton.text")); // NOI18N
         selectedFileCategoriesButton.setToolTipText(org.openide.util.NbBundle.getMessage(InterCasePanel.class, "InterCasePanel.selectedFileCategoriesButton.toolTipText")); // NOI18N
         selectedFileCategoriesButton.setEnabled(false);
@@ -292,7 +303,7 @@ public final class InterCasePanel extends javax.swing.JPanel {
 
 
     private void correlationTypeComboBoxActionPerformed(java.awt.event.ActionEvent evt) {//GEN-FIRST:event_correlationTypeComboBoxActionPerformed
-        boolean enableFileTypesFilter = this.correlationTypeComboBox.getSelectedItem().equals("Files"); 
+        boolean enableFileTypesFilter = this.correlationTypeComboBox.getSelectedItem().equals("Files");
         categoriesLabel.setEnabled(enableFileTypesFilter);
         allFileCategoriesRadioButton.setEnabled(enableFileTypesFilter);
         selectedFileCategoriesButton.setEnabled(enableFileTypesFilter);
@@ -326,8 +337,8 @@ public final class InterCasePanel extends javax.swing.JPanel {
     // End of variables declaration//GEN-END:variables
 
     /**
-     * Get the map of cases which was used to populate the combo box on
-     * this panel.
+     * Get the map of cases which was used to populate the combo box on this
+     * panel.
      *
      * @return an unmodifiable copy of the map of cases
      */
@@ -336,8 +347,8 @@ public final class InterCasePanel extends javax.swing.JPanel {
     }
 
     /**
-     * Set the datamodel for the combo box which displays the cases in
-     * the central repository
+     * Set the datamodel for the combo box which displays the cases in the
+     * central repository
      *
      * @param dataSourceComboBoxModel the DataSourceComboBoxModel to use
      */

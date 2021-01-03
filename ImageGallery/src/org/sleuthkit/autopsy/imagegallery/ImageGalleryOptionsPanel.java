@@ -1,7 +1,7 @@
 /*
  * Autopsy Forensic Browser
  *
- * Copyright 2013-2018 Basis Technology Corp.
+ * Copyright 2015-2019 Basis Technology Corp.
  * Contact: carrier <at> sleuthkit <dot> org
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,13 +20,10 @@ package org.sleuthkit.autopsy.imagegallery;
 
 import java.beans.PropertyChangeEvent;
 import java.util.EnumSet;
-import java.util.logging.Level;
 import org.openide.util.NbBundle;
 import org.sleuthkit.autopsy.casemodule.Case;
 import org.sleuthkit.autopsy.casemodule.NoCurrentCaseException;
-import org.sleuthkit.autopsy.coreutils.Logger;
 import org.sleuthkit.autopsy.ingest.IngestManager;
-import org.sleuthkit.datamodel.TskCoreException;
 
 /**
  * The Image/Video Gallery panel in the NetBeans provided Options Dialogs
@@ -37,7 +34,7 @@ import org.sleuthkit.datamodel.TskCoreException;
 @SuppressWarnings("PMD.SingularField") // UI widgets cause lots of false positives
 final class ImageGalleryOptionsPanel extends javax.swing.JPanel {
 
-    private static final Logger logger = Logger.getLogger(ImageGalleryOptionsPanel.class.getName());
+    private static final long serialVersionUID = 1L;
 
     ImageGalleryOptionsPanel(ImageGalleryOptionsPanelController controller) {
         initComponents();
@@ -75,32 +72,24 @@ final class ImageGalleryOptionsPanel extends javax.swing.JPanel {
         descriptionLabel = new javax.swing.JLabel();
         furtherDescriptionArea = new javax.swing.JTextArea();
 
-        setFont(getFont().deriveFont(getFont().getStyle() & ~java.awt.Font.BOLD, 11));
-
         jScrollPane1.setBorder(null);
 
-        enabledByDefaultBox.setFont(enabledByDefaultBox.getFont().deriveFont(enabledByDefaultBox.getFont().getStyle() & ~java.awt.Font.BOLD, 11));
         org.openide.awt.Mnemonics.setLocalizedText(enabledByDefaultBox, org.openide.util.NbBundle.getMessage(ImageGalleryOptionsPanel.class, "ImageGalleryOptionsPanel.enabledByDefaultBox.text")); // NOI18N
 
-        infoIconLabel.setFont(infoIconLabel.getFont().deriveFont(infoIconLabel.getFont().getStyle() & ~java.awt.Font.BOLD, 11));
         infoIconLabel.setIcon(new javax.swing.ImageIcon(getClass().getResource("/org/sleuthkit/autopsy/imagegallery/images/info-icon-16.png"))); // NOI18N
 
-        enabledForCaseBox.setFont(enabledForCaseBox.getFont().deriveFont(enabledForCaseBox.getFont().getStyle() & ~java.awt.Font.BOLD, 11));
         org.openide.awt.Mnemonics.setLocalizedText(enabledForCaseBox, org.openide.util.NbBundle.getMessage(ImageGalleryOptionsPanel.class, "ImageGalleryOptionsPanel.enabledForCaseBox.text")); // NOI18N
         enabledForCaseBox.setToolTipText(NbBundle.getMessage(ImageGalleryOptionsPanel.class, "ImageGalleryOptionsPanel.enabledForCaseBox.toolTipText")); // NOI18N
 
-        unavailableDuringInjestLabel.setFont(unavailableDuringInjestLabel.getFont().deriveFont(unavailableDuringInjestLabel.getFont().getStyle() & ~java.awt.Font.BOLD, 11));
         unavailableDuringInjestLabel.setIcon(new javax.swing.ImageIcon(getClass().getResource("/org/sleuthkit/autopsy/imagegallery/images/warning16.png"))); // NOI18N
         org.openide.awt.Mnemonics.setLocalizedText(unavailableDuringInjestLabel, NbBundle.getMessage(ImageGalleryOptionsPanel.class, "ImageGalleryOptionsPanel.unavailableDuringInjestLabel.text")); // NOI18N
 
         org.openide.awt.Mnemonics.setLocalizedText(groupCategorizationWarningBox, NbBundle.getMessage(ImageGalleryOptionsPanel.class, "ImageGalleryOptionsPanel.groupCategorizationWarningBox.text")); // NOI18N
 
-        descriptionLabel.setFont(descriptionLabel.getFont().deriveFont(descriptionLabel.getFont().getStyle() & ~java.awt.Font.BOLD, 11));
         org.openide.awt.Mnemonics.setLocalizedText(descriptionLabel, org.openide.util.NbBundle.getMessage(ImageGalleryOptionsPanel.class, "ImageGalleryOptionsPanel.descriptionLabel.text")); // NOI18N
 
         furtherDescriptionArea.setBackground(new java.awt.Color(240, 240, 240));
         furtherDescriptionArea.setColumns(20);
-        furtherDescriptionArea.setFont(furtherDescriptionArea.getFont().deriveFont(furtherDescriptionArea.getFont().getStyle() & ~java.awt.Font.BOLD, 11));
         furtherDescriptionArea.setLineWrap(true);
         furtherDescriptionArea.setRows(5);
         furtherDescriptionArea.setText(NbBundle.getMessage(ImageGalleryOptionsPanel.class, "ImageGalleryOptionsPanel.furtherDescriptionArea.text")); // NOI18N
@@ -195,12 +184,13 @@ final class ImageGalleryOptionsPanel extends javax.swing.JPanel {
         // If a case is open, save the per case setting
         try {
             Case openCase = Case.getCurrentCaseThrows();
-            ImageGalleryModule.getController().setListeningEnabled(enabledForCaseBox.isSelected());
+            ImageGalleryController controller = ImageGalleryController.getController(openCase);
+            if (controller != null) {
+                controller.setListeningEnabled(enabledForCaseBox.isSelected());
+            }
             new PerCaseProperties(openCase).setConfigSetting(ImageGalleryModule.getModuleName(), PerCaseProperties.ENABLED, Boolean.toString(enabledForCaseBox.isSelected()));
         } catch (NoCurrentCaseException ex) {
             // It's not an error if there's no case open
-        } catch (TskCoreException ex) {
-            logger.log(Level.SEVERE, "Failed to get image gallery controller", ex); //NON-NLS
         }
 
     }

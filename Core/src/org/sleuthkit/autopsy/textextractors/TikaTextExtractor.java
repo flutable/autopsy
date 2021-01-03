@@ -1,7 +1,7 @@
 /*
  * Autopsy Forensic Browser
  *
- * Copyright 2011-2018 Basis Technology Corp.
+ * Copyright 2011-2020 Basis Technology Corp.
  * Contact: carrier <at> sleuthkit <dot> org
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,8 +29,10 @@ import java.io.InputStream;
 import java.io.PushbackReader;
 import java.io.Reader;
 import java.nio.file.Paths;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Objects;
+import java.util.Map;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -40,8 +42,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.logging.Level;
 import java.util.stream.Collectors;
-import java.util.stream.Stream;
 import org.apache.tika.Tika;
+import org.apache.tika.exception.TikaException;
 import org.apache.tika.metadata.Metadata;
 import org.apache.tika.parser.AutoDetectParser;
 import org.apache.tika.parser.ParseContext;
@@ -58,12 +60,22 @@ import org.sleuthkit.autopsy.casemodule.NoCurrentCaseException;
 import org.sleuthkit.autopsy.coreutils.ExecUtil;
 import org.sleuthkit.autopsy.coreutils.ExecUtil.ProcessTerminator;
 import org.sleuthkit.autopsy.coreutils.FileUtil;
+import org.sleuthkit.autopsy.coreutils.Logger;
 import org.sleuthkit.autopsy.coreutils.PlatformUtil;
 import org.sleuthkit.autopsy.textextractors.configs.ImageConfig;
 import org.sleuthkit.autopsy.datamodel.ContentUtils;
 import org.sleuthkit.datamodel.AbstractFile;
 import org.sleuthkit.datamodel.Content;
 import org.sleuthkit.datamodel.ReadContentInputStream;
+import org.xml.sax.ContentHandler;
+import org.xml.sax.SAXException;
+import org.xml.sax.helpers.DefaultHandler;
+import com.google.common.collect.ImmutableMap; 
+import java.io.InputStreamReader;
+import java.nio.charset.Charset;
+import java.util.ArrayList;
+import org.apache.tika.parser.pdf.PDFParserConfig.OCR_STRATEGY;
+import org.sleuthkit.autopsy.coreutils.ExecUtil.HybridTerminator;
 
 /**
  * Extracts text from Tika supported content. Protects against Tika parser hangs
@@ -118,7 +130,9 @@ final class TikaTextExtractor implements TextExtractor {
                     "application/x-z", //NON-NLS
                     "application/x-compress"); //NON-NLS
 
-    private static final java.util.logging.Logger tikaLogger = java.util.logging.Logger.getLogger("Tika"); //NON-NLS
+    // Used to log to the tika file that is why it uses the java.util.logging.logger class instead of the Autopsy one
+    private static final java.util.logging.Logger TIKA_LOGGER = java.util.logging.Logger.getLogger("Tika"); //NON-NLS
+    private static final Logger AUTOPSY_LOGGER = Logger.getLogger(TikaTextExtractor.class.getName());
 
     private final ThreadFactory tikaThreadFactory
             = new ThreadFactoryBuilder().setNameFormat("tika-reader-%d").build();
@@ -134,7 +148,8 @@ final class TikaTextExtractor implements TextExtractor {
     private static final File TESSERACT_PATH = locateTesseractExecutable();
     private String languagePacks = formatLanguagePacks(PlatformUtil.getOcrLanguagePacks());
     private static final String TESSERACT_OUTPUT_FILE_NAME = "tess_output"; //NON-NLS
-    
+    private Map<String, String> metadataMap;
+
     private ProcessTerminator processTerminator;
 
     private static final List<String> TIKA_SUPPORTED_TYPES
@@ -149,8 +164,8 @@ final class TikaTextExtractor implements TextExtractor {
 
     /**
      * If Tesseract has been installed and is set to be used through
-     * configuration, then ocr is enabled. OCR can only currently be run on
-     * 64 bit Windows OS.
+     * configuration, then ocr is enabled. OCR can only currently be run on 64
+     * bit Windows OS.
      *
      * @return Flag indicating if OCR is set to be used.
      */
@@ -172,45 +187,31 @@ final class TikaTextExtractor implements TextExtractor {
      */
     @Override
     public Reader getReader() throws InitReaderException {
-        InputStream stream = null;
-
-        ParseContext parseContext = new ParseContext();
-        parseContext.set(Parser.class, parser);
-
-        if (ocrEnabled() && content instanceof AbstractFile) {
-            AbstractFile file = ((AbstractFile) content);
-            //Run OCR on images with Tesseract directly. 
-            if (file.getMIMEType().toLowerCase().startsWith("image/")) {
-                stream = performOCR(file);
-            } else {
-                //Otherwise, go through Tika for PDFs so that it can
-                //extract images and run Tesseract on them.     
-                PDFParserConfig pdfConfig = new PDFParserConfig();
-
-                // Extracting the inline images and letting Tesseract run on each inline image.
-                // https://wiki.apache.org/tika/PDFParser%20%28Apache%20PDFBox%29
-                // https://tika.apache.org/1.7/api/org/apache/tika/parser/pdf/PDFParserConfig.html
-                pdfConfig.setExtractInlineImages(true);
-                // Multiple pages within a PDF file might refer to the same underlying image.
-                pdfConfig.setExtractUniqueInlineImagesOnly(true);
-                parseContext.set(PDFParserConfig.class, pdfConfig);
-
-                // Configure Tesseract parser to perform OCR
-                TesseractOCRConfig ocrConfig = new TesseractOCRConfig();
-                String tesseractFolder = TESSERACT_PATH.getParent();
-                ocrConfig.setTesseractPath(tesseractFolder);
-                
-                ocrConfig.setLanguage(languagePacks);
-                ocrConfig.setTessdataPath(PlatformUtil.getOcrLanguagePacksPath());
-                parseContext.set(TesseractOCRConfig.class, ocrConfig);
-
-                stream = new ReadContentInputStream(content);
-            }
-        } else {
-            stream = new ReadContentInputStream(content);
+        if (!this.isSupported()) {
+            throw new InitReaderException("Content is not supported");
         }
 
-        Metadata metadata = new Metadata();
+        // Only abstract files are supported, see isSupported()
+        final AbstractFile file = ((AbstractFile) content);
+        // This mime type must be non-null, see isSupported()
+        final String mimeType = file.getMIMEType();
+
+        // Handle images seperately so the OCR task can be cancelled.
+        // See JIRA-4519 for the need to have cancellation in the UI and ingest.
+        if (ocrEnabled() && mimeType.toLowerCase().startsWith("image/")) {
+            InputStream imageOcrStream = performOCR(file);
+            return new InputStreamReader(imageOcrStream, Charset.forName("UTF-8"));
+        }
+
+        // Set up Tika
+        final InputStream stream = new ReadContentInputStream(content);
+        final ParseContext parseContext = new ParseContext();
+
+        // Documents can contain other documents. By adding
+        // the parser back into the context, Tika will recursively
+        // parse embedded documents.
+        parseContext.set(Parser.class, parser);
+
         // Use the more memory efficient Tika SAX parsers for DOCX and
         // PPTX files (it already uses SAX for XLSX).
         OfficeParserConfig officeParserConfig = new OfficeParserConfig();
@@ -218,6 +219,30 @@ final class TikaTextExtractor implements TextExtractor {
         officeParserConfig.setUseSAXDocxExtractor(true);
         parseContext.set(OfficeParserConfig.class, officeParserConfig);
 
+        if (ocrEnabled()) {
+            // Configure OCR for Tika if it chooses to run OCR
+            // during extraction
+            TesseractOCRConfig ocrConfig = new TesseractOCRConfig();
+            String tesseractFolder = TESSERACT_PATH.getParent();
+            ocrConfig.setTesseractPath(tesseractFolder);
+            ocrConfig.setLanguage(languagePacks);
+            ocrConfig.setTessdataPath(PlatformUtil.getOcrLanguagePacksPath());
+            parseContext.set(TesseractOCRConfig.class, ocrConfig);
+
+            // Configure how Tika handles OCRing PDFs
+            PDFParserConfig pdfConfig = new PDFParserConfig();
+
+            // This stategy tries to pick between OCRing a page in the 
+            // PDF and doing text extraction. It makes this choice by
+            // first running text extraction and then counting characters.
+            // If there are too few characters or too many unmapped 
+            // unicode characters, it'll run the entire page through OCR
+            // and take that output instead. See JIRA-6938
+            pdfConfig.setOcrStrategy(OCR_STRATEGY.AUTO);
+            parseContext.set(PDFParserConfig.class, pdfConfig);
+        }
+
+        Metadata metadata = new Metadata();
         //Make the creation of a TikaReader a cancellable future in case it takes too long
         Future<Reader> future = executorService.submit(
                 new GetTikaReader(parser, stream, metadata, parseContext));
@@ -231,9 +256,16 @@ final class TikaTextExtractor implements TextExtractor {
                         + "Tika returned empty reader for " + content);
             }
             pushbackReader.unread(read);
-            //concatenate parsed content and meta data into a single reader.
-            CharSource metaDataCharSource = getMetaDataCharSource(metadata);
-            return CharSource.concat(new ReaderCharSource(pushbackReader), metaDataCharSource).openStream();
+            
+            //Save the metadata if it has not been fetched already.
+            if (metadataMap == null) {
+                metadataMap = new HashMap<>();
+                for (String mtdtKey : metadata.names()) {
+                    metadataMap.put(mtdtKey, metadata.get(mtdtKey));
+                }
+            }
+            
+            return new ReaderCharSource(pushbackReader).openStream();
         } catch (TimeoutException te) {
             final String msg = NbBundle.getMessage(this.getClass(),
                     "AbstractFileTikaTextExtract.index.tikaParseTimeout.text",
@@ -242,7 +274,9 @@ final class TikaTextExtractor implements TextExtractor {
         } catch (InitReaderException ex) {
             throw ex;
         } catch (Exception ex) {
-            tikaLogger.log(Level.WARNING, "Exception: Unable to Tika parse the "
+            AUTOPSY_LOGGER.log(Level.WARNING, String.format("Error with file [id=%d] %s, see Tika log for details...",
+                    content.getId(), content.getName()));
+            TIKA_LOGGER.log(Level.WARNING, "Exception: Unable to Tika parse the "
                     + "content" + content.getId() + ": " + content.getName(),
                     ex.getCause()); //NON-NLS
             final String msg = NbBundle.getMessage(this.getClass(),
@@ -269,7 +303,7 @@ final class TikaTextExtractor implements TextExtractor {
         File outputFile = null;
         try {
             String tempDirectory = Case.getCurrentCaseThrows().getTempDirectory();
-            
+
             //Appending file id makes the name unique
             String tempFileName = FileUtil.escapeFileName(file.getId() + file.getName());
             inputFile = Paths.get(tempDirectory, tempFileName).toFile();
@@ -310,7 +344,7 @@ final class TikaTextExtractor implements TextExtractor {
             }
         }
     }
-    
+
     /**
      * Wraps the creation of a TikaReader into a Future so that it can be
      * cancelled.
@@ -399,20 +433,33 @@ final class TikaTextExtractor implements TextExtractor {
     }
 
     /**
-     * Gets a CharSource that wraps a formated representation of the given
-     * Metadata.
+     * Get the content metadata, if any.
      *
-     * @param metadata The Metadata to wrap as a CharSource
-     *
-     * @return A CharSource for the given MetaData
+     * @return Metadata as a name -> value map
      */
-    static private CharSource getMetaDataCharSource(Metadata metadata) {
-        return CharSource.wrap(
-                new StringBuilder("\n\n------------------------------METADATA------------------------------\n\n")
-                        .append(Stream.of(metadata.names()).sorted()
-                                .map(key -> key + ": " + metadata.get(key))
-                                .collect(Collectors.joining("\n"))
-                        ));
+    @Override
+    public Map<String, String> getMetadata() {
+        if (metadataMap != null) {
+            return ImmutableMap.copyOf(metadataMap);
+        }
+        
+        try {
+            metadataMap = new HashMap<>();
+            InputStream stream = new ReadContentInputStream(content);
+            ContentHandler doNothingContentHandler = new DefaultHandler();
+            Metadata mtdt = new Metadata();
+            parser.parse(stream, doNothingContentHandler, mtdt);
+            for (String mtdtKey : mtdt.names()) {
+                metadataMap.put(mtdtKey, mtdt.get(mtdtKey));
+            }
+        } catch (IOException | SAXException | TikaException ex) {
+            AUTOPSY_LOGGER.log(Level.WARNING, String.format("Error getting metadata for file [id=%d] %s, see Tika log for details...", //NON-NLS
+                    content.getId(), content.getName()));
+            TIKA_LOGGER.log(Level.WARNING, "Exception: Unable to get metadata for " //NON-NLS
+                    + "content" + content.getId() + ": " + content.getName(), ex); //NON-NLS
+        }
+
+        return metadataMap;
     }
 
     /**
@@ -422,11 +469,11 @@ final class TikaTextExtractor implements TextExtractor {
      */
     @Override
     public boolean isSupported() {
-        if(!(content instanceof AbstractFile)) {
+        if (!(content instanceof AbstractFile)) {
             return false;
         }
-        
-        String detectedType = ((AbstractFile)content).getMIMEType();
+
+        String detectedType = ((AbstractFile) content).getMIMEType();
         if (detectedType == null
                 || BINARY_MIME_TYPES.contains(detectedType) //any binary unstructured blobs (string extraction will be used)
                 || ARCHIVE_MIME_TYPES.contains(detectedType)
@@ -435,7 +482,7 @@ final class TikaTextExtractor implements TextExtractor {
                 ) {
             return false;
         }
-        
+
         return TIKA_SUPPORTED_TYPES.contains(detectedType);
     }
 
@@ -481,22 +528,29 @@ final class TikaTextExtractor implements TextExtractor {
      * @param context Instance containing config classes
      */
     @Override
-    public void setExtractionSettings(Lookup context) {
+    public void setExtractionSettings(Lookup context) {    
         if (context != null) {
+            List<ProcessTerminator> terminators = new ArrayList<>();
             ImageConfig configInstance = context.lookup(ImageConfig.class);
             if (configInstance != null) {
-                if(Objects.nonNull(configInstance.getOCREnabled())) {
+                if (Objects.nonNull(configInstance.getOCREnabled())) {
                     this.tesseractOCREnabled = configInstance.getOCREnabled();
                 }
-                
-                if(Objects.nonNull(configInstance.getOCRLanguages())) {
+
+                if (Objects.nonNull(configInstance.getOCRLanguages())) {
                     this.languagePacks = formatLanguagePacks(configInstance.getOCRLanguages());
                 }
+                
+                terminators.add(configInstance.getOCRTimeoutTerminator());
             }
 
             ProcessTerminator terminatorInstance = context.lookup(ProcessTerminator.class);
             if (terminatorInstance != null) {
-                this.processTerminator = terminatorInstance;
+                terminators.add(terminatorInstance);
+            }
+            
+            if(!terminators.isEmpty()) {
+                this.processTerminator = new HybridTerminator(terminators);
             }
         }
     }

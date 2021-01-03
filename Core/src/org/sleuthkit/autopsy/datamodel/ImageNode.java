@@ -1,7 +1,7 @@
 /*
  * Autopsy Forensic Browser
  *
- * Copyright 2011-2018 Basis Technology Corp.
+ * Copyright 2012-2019 Basis Technology Corp.
  * Contact: carrier <at> sleuthkit <dot> org
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,15 +26,19 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.EnumSet;
 import java.util.List;
+import java.util.Set;
 import java.util.logging.Level;
 import javax.swing.Action;
-import org.openide.nodes.Children;
+import org.apache.commons.lang3.tuple.Pair;
 import org.openide.nodes.Sheet;
 import org.openide.util.NbBundle;
 import org.openide.util.NbBundle.Messages;
 import org.sleuthkit.autopsy.casemodule.Case;
+import org.sleuthkit.autopsy.casemodule.DeleteDataSourceAction;
 import org.sleuthkit.autopsy.casemodule.NoCurrentCaseException;
-import org.sleuthkit.autopsy.casemodule.datasourcesummary.ViewSummaryInformationAction;
+import org.sleuthkit.autopsy.datasourcesummary.ui.ViewSummaryInformationAction;
+import org.sleuthkit.autopsy.centralrepository.datamodel.CorrelationAttributeInstance;
+import org.sleuthkit.autopsy.corecomponents.DataResultViewerTable;
 import org.sleuthkit.autopsy.coreutils.Logger;
 import org.sleuthkit.autopsy.directorytree.ExplorerNodeActionVisitor;
 import org.sleuthkit.autopsy.directorytree.FileSearchAction;
@@ -47,6 +51,8 @@ import org.sleuthkit.datamodel.Image;
 import org.sleuthkit.datamodel.SleuthkitCase.CaseDbQuery;
 import org.sleuthkit.datamodel.TskCoreException;
 import org.sleuthkit.datamodel.VirtualDirectory;
+import org.sleuthkit.autopsy.datamodel.BaseChildFactory.NoSuchEventBusException;
+import org.sleuthkit.datamodel.Tag;
 
 /**
  * This class is used to represent the "Node" for the image. The children of
@@ -55,6 +61,7 @@ import org.sleuthkit.datamodel.VirtualDirectory;
 public class ImageNode extends AbstractContentNode<Image> {
 
     private static final Logger logger = Logger.getLogger(ImageNode.class.getName());
+    private static final Set<IngestManager.IngestModuleEvent> INGEST_MODULE_EVENTS_OF_INTEREST = EnumSet.of(IngestManager.IngestModuleEvent.CONTENT_CHANGED);
 
     /**
      * Helper so that the display name and the name used in building the path
@@ -80,7 +87,7 @@ public class ImageNode extends AbstractContentNode<Image> {
         this.setIconBaseWithExtension("org/sleuthkit/autopsy/images/hard-drive-icon.jpg"); //NON-NLS
 
         // Listen for ingest events so that we can detect new added files (e.g. carved)
-        IngestManager.getInstance().addIngestModuleEventListener(pcl);
+        IngestManager.getInstance().addIngestModuleEventListener(INGEST_MODULE_EVENTS_OF_INTEREST, pcl);
         // Listen for case events so that we can detect when case is closed
         Case.addEventTypeSubscriber(EnumSet.of(Case.Events.CURRENT_CASE), pcl);
     }
@@ -99,7 +106,7 @@ public class ImageNode extends AbstractContentNode<Image> {
      */
     @Override
     @Messages({"ImageNode.action.runIngestMods.text=Run Ingest Modules",
-        "ImageNode.getActions.openFileSearchByAttr.text=Open File Search by Attributes",})
+        "ImageNode.getActions.openFileSearchByAttr.text=Open File Search by Attributes"})
     public Action[] getActions(boolean context) {
 
         List<Action> actionsList = new ArrayList<>();
@@ -107,12 +114,11 @@ public class ImageNode extends AbstractContentNode<Image> {
             actionsList.add(a);
         }
         actionsList.addAll(ExplorerNodeActionVisitor.getActions(content));
-        actionsList.add(new FileSearchAction(
-                Bundle.ImageNode_getActions_openFileSearchByAttr_text()));
+        actionsList.add(new FileSearchAction(Bundle.ImageNode_getActions_openFileSearchByAttr_text()));
         actionsList.add(new ViewSummaryInformationAction(content.getId()));
         actionsList.add(new RunIngestModulesAction(Collections.<Content>singletonList(content)));
-        actionsList.add(new NewWindowViewAction(
-                NbBundle.getMessage(this.getClass(), "ImageNode.getActions.viewInNewWin.text"), this));
+        actionsList.add(new NewWindowViewAction(NbBundle.getMessage(this.getClass(), "ImageNode.getActions.viewInNewWin.text"), this));
+        actionsList.add(new DeleteDataSourceAction(content.getId()));
         return actionsList.toArray(new Action[0]);
     }
 
@@ -126,7 +132,7 @@ public class ImageNode extends AbstractContentNode<Image> {
         "ImageNode.createSheet.type.text=Image",
         "ImageNode.createSheet.sectorSize.name=Sector Size (Bytes)",
         "ImageNode.createSheet.sectorSize.displayName=Sector Size (Bytes)",
-        "ImageNode.createSheet.sectorSize.desc=Sector size of the image in bytes.",      
+        "ImageNode.createSheet.sectorSize.desc=Sector size of the image in bytes.",
         "ImageNode.createSheet.timezone.name=Timezone",
         "ImageNode.createSheet.timezone.displayName=Timezone",
         "ImageNode.createSheet.timezone.desc=Timezone of the image",
@@ -224,18 +230,23 @@ public class ImageNode extends AbstractContentNode<Image> {
                 if (parent != null) {
                     // Is this a new carved file?
                     if (parent.getName().equals(VirtualDirectory.NAME_CARVED)) {
-                        // Was this new carved file produced from this image?
-                        if (parent.getParent().getId() == getContent().getId()) {
-                            Children children = getChildren();
-                            if (children != null) {
-                                ((ContentChildren) children).refreshChildren();
-                                children.getNodesCount();
+                        // Is this new carved file for this data source?
+                        if (newContent.getDataSource().getId() == getContent().getDataSource().getId()) {
+                            // Find the image (if any) associated with the new content and
+                            // trigger a refresh if it matches the image wrapped by this node.
+                            while ((parent = parent.getParent()) != null) {
+                                if (parent.getId() == getContent().getId()) {
+                                    BaseChildFactory.post(getName(), new BaseChildFactory.RefreshKeysEvent());
+                                    break;
+                                }
                             }
                         }
                     }
                 }
             } catch (TskCoreException ex) {
                 // Do nothing.
+            } catch (NoSuchEventBusException ex) {
+                logger.log(Level.WARNING, "Failed to post key refresh event.", ex); // NON-NLS
             }
         } else if (eventType.equals(Case.Events.CURRENT_CASE.toString())) {
             if (evt.getNewValue() == null) {
@@ -245,4 +256,75 @@ public class ImageNode extends AbstractContentNode<Image> {
         }
     };
 
+    /**
+     * Reads and returns a list of all tags associated with this content node.
+     *
+     * Null implementation of an abstract method.
+     *
+     * @return list of tags associated with the node.
+     */
+    @Override
+    protected List<Tag> getAllTagsFromDatabase() {
+        return new ArrayList<>();
+    }
+
+    /**
+     * Returns correlation attribute instance for the underlying content of the
+     * node.
+     *
+     * Null implementation of an abstract method.
+     *
+     * @return correlation attribute instance for the underlying content of the
+     *         node.
+     */
+    @Override
+    protected CorrelationAttributeInstance getCorrelationAttributeInstance() {
+        return null;
+    }
+
+    /**
+     * Returns Score property for the node.
+     *
+     * Null implementation of an abstract method.
+     *
+     * @param tags list of tags.
+     *
+     * @return Score property for the underlying content of the node.
+     */
+    @Override
+    protected Pair<DataResultViewerTable.Score, String> getScorePropertyAndDescription(List<Tag> tags) {
+        return Pair.of(DataResultViewerTable.Score.NO_SCORE, NO_DESCR);
+    }
+
+    /**
+     * Returns comment property for the node.
+     *
+     * Null implementation of an abstract method.
+     *
+     * @param tags      list of tags
+     * @param attribute correlation attribute instance
+     *
+     * @return Comment property for the underlying content of the node.
+     */
+    @Override
+    protected DataResultViewerTable.HasCommentStatus getCommentProperty(List<Tag> tags, CorrelationAttributeInstance attribute) {
+        return DataResultViewerTable.HasCommentStatus.NO_COMMENT;
+    }
+
+    /**
+     * Returns occurrences/count property for the node.
+     *
+     * Null implementation of an abstract method.
+     *
+     * @param attributeType      the type of the attribute to count
+     * @param attributeValue     the value of the attribute to coun
+     * @param defaultDescription a description to use when none is determined by
+     *                           the getCountPropertyAndDescription method
+     *
+     * @return count property for the underlying content of the node.
+     */
+    @Override
+    protected Pair<Long, String> getCountPropertyAndDescription(CorrelationAttributeInstance.Type attributeType, String attributeValue, String defaultDescription) {
+        return Pair.of(-1L, NO_DESCR);
+    }
 }

@@ -20,7 +20,12 @@ package org.sleuthkit.autopsy.modules.embeddedfileextractor;
 
 import java.io.File;
 import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Iterator;
 import java.util.concurrent.ConcurrentHashMap;
+import javax.imageio.ImageIO;
+import javax.imageio.spi.IIORegistry;
 import org.openide.util.NbBundle;
 import org.sleuthkit.autopsy.casemodule.Case;
 import org.sleuthkit.datamodel.AbstractFile;
@@ -50,7 +55,7 @@ public final class EmbeddedFileExtractorIngestModule extends FileIngestModuleAda
     //Outer concurrent hashmap with keys of JobID, inner concurrentHashmap with keys of objectID
     private static final ConcurrentHashMap<Long, ConcurrentHashMap<Long, Archive>> mapOfDepthTrees = new ConcurrentHashMap<>();
     private static final IngestModuleReferenceCounter refCounter = new IngestModuleReferenceCounter();
-    private MSOfficeEmbeddedContentExtractor officeExtractor;
+    private DocumentEmbeddedContentExtractor documentExtractor;
     private SevenZipExtractor archiveExtractor;
     private FileTypeDetector fileTypeDetector;
     private long jobId;
@@ -112,17 +117,60 @@ public final class EmbeddedFileExtractorIngestModule extends FileIngestModuleAda
              * while processing archive files.
              */
             mapOfDepthTrees.put(jobId, new ConcurrentHashMap<>());
+            /**
+             * Initialize Java's Image I/O API so that image reading and writing
+             * (needed for image extraction) happens consistently through the
+             * same providers. See JIRA-6951 for more details.
+             */
+            initializeImageIO();
         }
         /*
          * Construct an embedded content extractor for processing Microsoft
-         * Office documents.
+         * Office documents and PDF documents.
          */
         try {
-            this.officeExtractor = new MSOfficeEmbeddedContentExtractor(context, fileTypeDetector, moduleDirRelative, moduleDirAbsolute);
+            this.documentExtractor = new DocumentEmbeddedContentExtractor(context, fileTypeDetector, moduleDirRelative, moduleDirAbsolute);
         } catch (NoCurrentCaseException ex) {
             throw new IngestModuleException(Bundle.EmbeddedFileExtractorIngestModule_UnableToGetMSOfficeExtractor_errMsg(), ex);
         }
-
+    }
+    
+    /**
+     * Initializes the ImageIO API and sorts the providers for
+     * deterministic image reading and writing.
+     */
+    private void initializeImageIO() {
+        ImageIO.scanForPlugins();
+        
+        // Sift through each registry category and sort category providers by
+        // their canonical class name.
+        IIORegistry pluginRegistry = IIORegistry.getDefaultInstance();
+        Iterator<Class<?>> categories = pluginRegistry.getCategories();
+        while(categories.hasNext()) {
+            sortPluginsInCategory(pluginRegistry, categories.next());
+        }
+    }
+    
+    /**
+     * Sorts all ImageIO SPI providers by their class name.
+     */
+    private <T> void sortPluginsInCategory(IIORegistry pluginRegistry, Class<T> category) {
+        Iterator<T> serviceProviderIter = pluginRegistry.getServiceProviders(category, false);
+        ArrayList<T> providers = new ArrayList<>();
+        while (serviceProviderIter.hasNext()) {
+            providers.add(serviceProviderIter.next());
+        }
+        Collections.sort(providers, (first, second) -> {
+            return first.getClass().getCanonicalName().compareToIgnoreCase(second.getClass().getCanonicalName());
+        });
+        for(int i = 0; i < providers.size() - 1; i++) {
+            for(int j = i + 1; j < providers.size(); j++) {
+                // The registry only accepts pairwise orderings. To guarantee a 
+                // total order, all pairs need to be exhausted.
+                pluginRegistry.setOrdering(category, providers.get(i), 
+                        providers.get(j));
+            }
+        }
     }
 
     @Override
@@ -155,8 +203,8 @@ public final class EmbeddedFileExtractorIngestModule extends FileIngestModuleAda
          */
         if (archiveExtractor.isSevenZipExtractionSupported(abstractFile)) {
             archiveExtractor.unpack(abstractFile, mapOfDepthTrees.get(jobId));
-        } else if (officeExtractor.isContentExtractionSupported(abstractFile)) {
-            officeExtractor.extractEmbeddedContent(abstractFile);
+        } else if (documentExtractor.isContentExtractionSupported(abstractFile)) {
+            documentExtractor.extractEmbeddedContent(abstractFile);
         }
         return ProcessResult.OK;
     }

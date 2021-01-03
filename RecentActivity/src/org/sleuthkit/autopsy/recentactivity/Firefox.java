@@ -2,7 +2,7 @@
  *
  * Autopsy Forensic Browser
  * 
- * Copyright 2012-2019 Basis Technology Corp.
+ * Copyright 2012-2020 Basis Technology Corp.
  * 
  * Copyright 2012 42six Solutions.
  * Contact: aebadirad <at> 42six <dot> com
@@ -43,7 +43,6 @@ import java.util.List;
 import java.util.Set;
 import java.util.logging.Level;
 import org.apache.commons.io.FilenameUtils;
-
 import org.openide.util.NbBundle;
 import org.openide.util.NbBundle.Messages;
 import org.sleuthkit.autopsy.casemodule.Case;
@@ -54,10 +53,8 @@ import org.sleuthkit.autopsy.coreutils.NetworkUtils;
 import org.sleuthkit.autopsy.datamodel.ContentUtils;
 import org.sleuthkit.autopsy.ingest.DataSourceIngestModuleProgress;
 import org.sleuthkit.autopsy.ingest.IngestJobContext;
-import org.sleuthkit.autopsy.ingest.IngestServices;
-import org.sleuthkit.autopsy.ingest.ModuleDataEvent;
 import org.sleuthkit.datamodel.AbstractFile;
-import org.sleuthkit.datamodel.Account;
+import org.sleuthkit.datamodel.Blackboard;
 import org.sleuthkit.datamodel.BlackboardArtifact;
 import org.sleuthkit.datamodel.BlackboardArtifact.ARTIFACT_TYPE;
 import org.sleuthkit.datamodel.BlackboardAttribute;
@@ -65,6 +62,7 @@ import org.sleuthkit.datamodel.BlackboardAttribute.ATTRIBUTE_TYPE;
 import org.sleuthkit.datamodel.Content;
 import org.sleuthkit.datamodel.ReadContentInputStream.ReadContentInputStreamException;
 import org.sleuthkit.datamodel.TskCoreException;
+import org.sleuthkit.datamodel.blackboardutils.WebBrowserArtifactsHelper;
 
 @Messages({
     "Progress_Message_Firefox_History=Firefox History",
@@ -98,7 +96,6 @@ class Firefox extends Extract {
                                                         + " AND moz_anno_attributes.name='downloads/destinationFileURI'"; //NON-NLS
     private static final String FORMHISTORY_QUERY = "SELECT fieldname, value FROM moz_formhistory";
     private static final String FORMHISTORY_QUERY_V64 = "SELECT fieldname, value, timesUsed, firstUsed, lastUsed FROM moz_formhistory";
-    private final IngestServices services = IngestServices.getInstance();
     private Content dataSource;
     private IngestJobContext context;
 
@@ -153,6 +150,11 @@ class Firefox extends Extract {
         Collection<BlackboardArtifact> bbartifacts = new ArrayList<>();
         int j = 0;
         for (AbstractFile historyFile : historyFiles) {
+            
+            if (context.dataSourceIngestIsCancelled()) {
+                return;
+            }
+            
             if (historyFile.getSize() == 0) {
                 continue;
             }
@@ -184,6 +186,11 @@ class Firefox extends Extract {
             List<HashMap<String, Object>> tempList = this.dbConnect(temps, HISTORY_QUERY);
             logger.log(Level.INFO, "{0} - Now getting history from {1} with {2} artifacts identified.", new Object[]{moduleName, temps, tempList.size()}); //NON-NLS
             for (HashMap<String, Object> result : tempList) {
+                
+                if (context.dataSourceIngestIsCancelled()) {
+                    return;
+                }
+                
                 String url = result.get("url").toString();
                 
                 Collection<BlackboardAttribute> bbattributes = new ArrayList<>();
@@ -209,7 +216,7 @@ class Firefox extends Extract {
                         RecentActivityExtracterModuleFactory.getModuleName(), domain)); //NON-NLS
 
                 }
-                BlackboardArtifact bbart = this.addArtifact(ARTIFACT_TYPE.TSK_WEB_HISTORY, historyFile, bbattributes);
+                BlackboardArtifact bbart = createArtifactWithAttributes(ARTIFACT_TYPE.TSK_WEB_HISTORY, historyFile, bbattributes);
                 if (bbart != null) {
                     bbartifacts.add(bbart);
                 }
@@ -218,9 +225,7 @@ class Firefox extends Extract {
             dbFile.delete();
         }
 
-        services.fireModuleDataEvent(new ModuleDataEvent(
-                NbBundle.getMessage(this.getClass(), "Firefox.parentModuleName"),
-                BlackboardArtifact.ARTIFACT_TYPE.TSK_WEB_HISTORY, bbartifacts));
+        postArtifacts(bbartifacts);
     }
 
     /**
@@ -277,6 +282,11 @@ class Firefox extends Extract {
             List<HashMap<String, Object>> tempList = this.dbConnect(temps, BOOKMARK_QUERY);
             logger.log(Level.INFO, "{0} - Now getting bookmarks from {1} with {2} artifacts identified.", new Object[]{moduleName, temps, tempList.size()}); //NON-NLS
             for (HashMap<String, Object> result : tempList) {
+                
+                if (context.dataSourceIngestIsCancelled()) {
+                    break;
+                }
+                
                 String url = result.get("url").toString();
 
                 Collection<BlackboardAttribute> bbattributes = new ArrayList<>();
@@ -300,7 +310,7 @@ class Firefox extends Extract {
                         RecentActivityExtracterModuleFactory.getModuleName(), domain)); //NON-NLS
                 }
 
-                BlackboardArtifact bbart = this.addArtifact(ARTIFACT_TYPE.TSK_WEB_BOOKMARK, bookmarkFile, bbattributes);
+                BlackboardArtifact bbart = createArtifactWithAttributes(ARTIFACT_TYPE.TSK_WEB_BOOKMARK, bookmarkFile, bbattributes);
                 if (bbart != null) {
                     bbartifacts.add(bbart);
                 }
@@ -309,9 +319,7 @@ class Firefox extends Extract {
             dbFile.delete();
         }
 
-        services.fireModuleDataEvent(new ModuleDataEvent(
-                NbBundle.getMessage(this.getClass(), "Firefox.parentModuleName"),
-                BlackboardArtifact.ARTIFACT_TYPE.TSK_WEB_BOOKMARK, bbartifacts));
+        postArtifacts(bbartifacts);
     }
 
     /**
@@ -376,6 +384,11 @@ class Firefox extends Extract {
             List<HashMap<String, Object>> tempList = this.dbConnect(temps, query);
             logger.log(Level.INFO, "{0} - Now getting cookies from {1} with {2} artifacts identified.", new Object[]{moduleName, temps, tempList.size()}); //NON-NLS
             for (HashMap<String, Object> result : tempList) {
+                
+                if (context.dataSourceIngestIsCancelled()) {
+                    break;
+                }
+                
                 String host = result.get("host").toString();
 
                 Collection<BlackboardAttribute> bbattributes = new ArrayList<>();
@@ -407,7 +420,7 @@ class Firefox extends Extract {
                         RecentActivityExtracterModuleFactory.getModuleName(), domain));
                 }
 
-                BlackboardArtifact bbart = this.addArtifact(ARTIFACT_TYPE.TSK_WEB_COOKIE, cookiesFile, bbattributes);
+                BlackboardArtifact bbart = createArtifactWithAttributes(ARTIFACT_TYPE.TSK_WEB_COOKIE, cookiesFile, bbattributes);
                 if (bbart != null) {
                     bbartifacts.add(bbart);
                 }
@@ -416,9 +429,7 @@ class Firefox extends Extract {
             dbFile.delete();
         }
 
-        services.fireModuleDataEvent(new ModuleDataEvent(
-                NbBundle.getMessage(this.getClass(), "Firefox.parentModuleName"),
-                BlackboardArtifact.ARTIFACT_TYPE.TSK_WEB_COOKIE, bbartifacts));
+        postArtifacts(bbartifacts);
     }
 
     /**
@@ -487,6 +498,11 @@ class Firefox extends Extract {
             List<HashMap<String, Object>> tempList = this.dbConnect(temps, DOWNLOAD_QUERY);
             logger.log(Level.INFO, "{0}- Now getting downloads from {1} with {2} artifacts identified.", new Object[]{moduleName, temps, tempList.size()}); //NON-NLS
             for (HashMap<String, Object> result : tempList) {
+                
+                if (context.dataSourceIngestIsCancelled()) {
+                    break;
+                }
+                
                 String source = result.get("source").toString();
 
                 Collection<BlackboardAttribute> bbattributes = new ArrayList<>();
@@ -529,22 +545,25 @@ class Firefox extends Extract {
                             domain)); //NON-NLS
                 }
 
-                BlackboardArtifact bbart = this.addArtifact(ARTIFACT_TYPE.TSK_WEB_DOWNLOAD, downloadsFile, bbattributes);
-                if (bbart != null) {
-                    bbartifacts.add(bbart);
-                }
-                
-                // find the downloaded file and create a TSK_DOWNLOAD_SOURCE for it.
-                 try {
-                    for (AbstractFile downloadedFile : fileManager.findFiles(dataSource, FilenameUtils.getName(downloadedFilePath), FilenameUtils.getPath(downloadedFilePath))) {
-                        BlackboardArtifact downloadSourceArt =  downloadedFile.newArtifact(BlackboardArtifact.ARTIFACT_TYPE.TSK_DOWNLOAD_SOURCE);
-                        downloadSourceArt.addAttributes(createDownloadSourceAttributes(source));
-                        bbartifacts.add(downloadSourceArt);
-                        break;
+                BlackboardArtifact webDownloadArtifact = createArtifactWithAttributes(ARTIFACT_TYPE.TSK_WEB_DOWNLOAD, downloadsFile, bbattributes);
+                if (webDownloadArtifact != null) {
+                    bbartifacts.add(webDownloadArtifact);
+
+                    // find the downloaded file and create a TSK_ASSOCIATED_OBJECT for it, associating it with the TSK_WEB_DOWNLOAD artifact.
+                    try {
+                        for (AbstractFile downloadedFile : fileManager.findFiles(dataSource, FilenameUtils.getName(downloadedFilePath), FilenameUtils.getPath(downloadedFilePath))) {
+                            BlackboardArtifact associatedObjectArtifact = downloadedFile.newArtifact(BlackboardArtifact.ARTIFACT_TYPE.TSK_ASSOCIATED_OBJECT);
+                            associatedObjectArtifact.addAttribute(
+                                    new BlackboardAttribute(BlackboardAttribute.ATTRIBUTE_TYPE.TSK_ASSOCIATED_ARTIFACT,
+                                            RecentActivityExtracterModuleFactory.getModuleName(), webDownloadArtifact.getArtifactID()));
+
+                            bbartifacts.add(associatedObjectArtifact);
+                            break;
+                        }
+                    } catch (TskCoreException ex) {
+                        logger.log(Level.SEVERE, String.format("Error creating associated object artifact for file  '%s'",
+                                downloadedFilePath), ex); //NON-NLS
                     }
-                } catch (TskCoreException ex) {
-                    logger.log(Level.SEVERE, String.format("Error creating download source artifact for file  '%s'",
-                        downloadedFilePath), ex); //NON-NLS
                 }
             }
             if (errors > 0) {
@@ -557,9 +576,7 @@ class Firefox extends Extract {
             break;
         }
 
-        services.fireModuleDataEvent(new ModuleDataEvent(
-                NbBundle.getMessage(this.getClass(), "Firefox.parentModuleName"),
-                BlackboardArtifact.ARTIFACT_TYPE.TSK_WEB_DOWNLOAD, bbartifacts));
+        postArtifacts(bbartifacts);
     }
 
     /**
@@ -621,6 +638,11 @@ class Firefox extends Extract {
 
             logger.log(Level.INFO, "{0} - Now getting downloads from {1} with {2} artifacts identified.", new Object[]{moduleName, temps, tempList.size()}); //NON-NLS
             for (HashMap<String, Object> result : tempList) {
+                
+                if (context.dataSourceIngestIsCancelled()) {
+                    break;
+                }
+                
                 String url = result.get("url").toString();
                 
                 Collection<BlackboardAttribute> bbattributes = new ArrayList<>();
@@ -663,22 +685,24 @@ class Firefox extends Extract {
                         RecentActivityExtracterModuleFactory.getModuleName(), domain)); //NON-NLS
                 }
 
-                BlackboardArtifact bbart = this.addArtifact(ARTIFACT_TYPE.TSK_WEB_DOWNLOAD, downloadsFile, bbattributes);
-                if (bbart != null) {
-                    bbartifacts.add(bbart);
-                }
+                BlackboardArtifact webDownloadArtifact = createArtifactWithAttributes(ARTIFACT_TYPE.TSK_WEB_DOWNLOAD, downloadsFile, bbattributes);
+                if (webDownloadArtifact != null) {
+                    bbartifacts.add(webDownloadArtifact);
                 
-                // find the downloaded file and create a TSK_DOWNLOAD_SOURCE for it.
-                 try {
-                    for (AbstractFile downloadedFile : fileManager.findFiles(dataSource, FilenameUtils.getName(downloadedFilePath), FilenameUtils.getPath(downloadedFilePath))) {
-                        BlackboardArtifact downloadSourceArt =  downloadedFile.newArtifact(BlackboardArtifact.ARTIFACT_TYPE.TSK_DOWNLOAD_SOURCE);
-                        downloadSourceArt.addAttributes(createDownloadSourceAttributes(url));
-                        bbartifacts.add(downloadSourceArt);
-                        break;
+                    // find the downloaded file and create a TSK_ASSOCIATED_OBJECT for it, associating it with the TSK_WEB_DOWNLOAD artifact.
+                     try {
+                        for (AbstractFile downloadedFile : fileManager.findFiles(dataSource, FilenameUtils.getName(downloadedFilePath), FilenameUtils.getPath(downloadedFilePath))) {
+                            BlackboardArtifact associatedObjectArtifact =  downloadedFile.newArtifact(BlackboardArtifact.ARTIFACT_TYPE.TSK_ASSOCIATED_OBJECT);
+                            associatedObjectArtifact.addAttribute(
+                                    new BlackboardAttribute(BlackboardAttribute.ATTRIBUTE_TYPE.TSK_ASSOCIATED_ARTIFACT,
+                                            RecentActivityExtracterModuleFactory.getModuleName(), webDownloadArtifact.getArtifactID()));
+                            bbartifacts.add(associatedObjectArtifact);
+                            break;
+                        }
+                    } catch (TskCoreException ex) {
+                        logger.log(Level.SEVERE, String.format("Error creating associated object artifact for file  '%s'",
+                            downloadedFilePath), ex); //NON-NLS
                     }
-                } catch (TskCoreException ex) {
-                    logger.log(Level.SEVERE, String.format("Error creating download source artifact for file  '%s'",
-                        downloadedFilePath), ex); //NON-NLS
                 }
             }
             if (errors > 0) {
@@ -690,9 +714,7 @@ class Firefox extends Extract {
             break;
         }
 
-        services.fireModuleDataEvent(new ModuleDataEvent(
-                NbBundle.getMessage(this.getClass(), "Firefox.parentModuleName"),
-                BlackboardArtifact.ARTIFACT_TYPE.TSK_WEB_DOWNLOAD, bbartifacts));
+        postArtifacts(bbartifacts);
     }
     
     /**
@@ -764,6 +786,11 @@ class Firefox extends Extract {
             List<HashMap<String, Object>> tempList = this.dbConnect(tempFilePath, formHistoryQuery);
             logger.log(Level.INFO, "{0} - Now getting history from {1} with {2} artifacts identified.", new Object[]{moduleName, tempFilePath, tempList.size()}); //NON-NLS
             for (HashMap<String, Object> result : tempList) {
+                
+                if (context.dataSourceIngestIsCancelled()) {
+                    break;
+                }
+                
                 Collection<BlackboardAttribute> bbattributes = new ArrayList<>();
                 
                 String fieldName = ((result.get("fieldname").toString() != null) ? result.get("fieldname").toString() : "");
@@ -796,9 +823,8 @@ class Firefox extends Extract {
                
                 }
                 // Add artifact
-                BlackboardArtifact bbart = this.addArtifact(ARTIFACT_TYPE.TSK_WEB_FORM_AUTOFILL, formHistoryFile, bbattributes);
+                BlackboardArtifact bbart = createArtifactWithAttributes(ARTIFACT_TYPE.TSK_WEB_FORM_AUTOFILL, formHistoryFile, bbattributes);
                 if (bbart != null) {
-                    this.indexArtifact(bbart);
                     bbartifacts.add(bbart);
                 }
             }
@@ -806,9 +832,7 @@ class Firefox extends Extract {
             dbFile.delete();
         }
 
-        services.fireModuleDataEvent(new ModuleDataEvent(
-                NbBundle.getMessage(this.getClass(), "Firefox.parentModuleName"),
-                BlackboardArtifact.ARTIFACT_TYPE.TSK_WEB_FORM_AUTOFILL, bbartifacts));
+        postArtifacts(bbartifacts);
     }
      
      
@@ -835,7 +859,6 @@ class Firefox extends Extract {
         }
 
         dataFound = true;
-        Collection<BlackboardArtifact> bbartifacts = new ArrayList<>();
         int j = 0;
 
         while (j < autofillProfilesFiles.size()) {
@@ -893,6 +916,19 @@ class Firefox extends Extract {
                 continue;
             }
 
+            WebBrowserArtifactsHelper helper;
+            try {
+                // Helper to create web form address artifacts.
+                helper = new WebBrowserArtifactsHelper(
+                        Case.getCurrentCaseThrows().getSleuthkitCase(),
+                        NbBundle.getMessage(this.getClass(), "Firefox.parentModuleName"),
+                        profileFile
+                );
+            } catch (NoCurrentCaseException ex) {
+                logger.log(Level.SEVERE, "No case open, bailing.", ex); //NON-NLS
+                return;
+            }
+            
             for (JsonElement result : jAddressesArray) {
                 JsonObject address = result.getAsJsonObject();
                 if (address == null) {
@@ -936,65 +972,9 @@ class Firefox extends Extract {
                 String mailingAddress = makeFullAddress(addressLine1, addressLine2, addressLine3, postalCode, country );
                 
                 try {
-                    Collection<BlackboardAttribute> bbattributes = new ArrayList<>();
-                    bbattributes.add(new BlackboardAttribute(ATTRIBUTE_TYPE.TSK_NAME_PERSON,
-                        RecentActivityExtracterModuleFactory.getModuleName(),
-                        name)); //NON-NLS
-                    
-                    bbattributes.add(new BlackboardAttribute(ATTRIBUTE_TYPE.TSK_EMAIL,
-                        RecentActivityExtracterModuleFactory.getModuleName(),
-                        email)); //NON-NLS
-                    
-                    bbattributes.add(new BlackboardAttribute(ATTRIBUTE_TYPE.TSK_PHONE_NUMBER,
-                        RecentActivityExtracterModuleFactory.getModuleName(),
-                        phoneNumber)); //NON-NLS
-                     
-                    bbattributes.add(new BlackboardAttribute(ATTRIBUTE_TYPE.TSK_LOCATION,
-                        RecentActivityExtracterModuleFactory.getModuleName(),
-                        mailingAddress)); //NON-NLS
-                 
-                    bbattributes.add(new BlackboardAttribute(ATTRIBUTE_TYPE.TSK_DATETIME_CREATED,
-                        RecentActivityExtracterModuleFactory.getModuleName(),
-                        datetimeCreated)); //NON-NLS
-
-                    bbattributes.add(new BlackboardAttribute(ATTRIBUTE_TYPE.TSK_DATETIME_ACCESSED,
-                        RecentActivityExtracterModuleFactory.getModuleName(),
-                        datetimeLastUsed)); //NON-NLS       
-                     
-                    bbattributes.add(new BlackboardAttribute(ATTRIBUTE_TYPE.TSK_COUNT,
-                        RecentActivityExtracterModuleFactory.getModuleName(),
-                        timesUsed)); //NON-NLS
-
-                    BlackboardArtifact bbart = profileFile.newArtifact(ARTIFACT_TYPE.TSK_WEB_FORM_ADDRESS);  
-                    
-                    // index the artifact for keyword search
-                    if (bbart != null) {
-                        bbart.addAttributes(bbattributes);
-                        this.indexArtifact(bbart);
-                        bbartifacts.add(bbart);
-                    }
-                    
-                    // If an email address is found, create an account instance for it
-                    if (email != null && !email.isEmpty()) {
-                        try {
-                            Case.getCurrentCaseThrows().getSleuthkitCase().getCommunicationsManager().createAccountFileInstance(Account.Type.EMAIL, email,  NbBundle.getMessage(this.getClass(), "Firefox.parentModuleName"), profileFile);
-                        } catch (NoCurrentCaseException | TskCoreException ex) {
-                            logger.log(Level.SEVERE, String.format("Error creating email account instance for '%s' from Firefox profiles file '%s' .",
-                                email, profileFile.getName()), ex); //NON-NLS
-                        } 
-                    }
-                    
-                    // If a phone number is found, create an account instance for it
-                    if (phoneNumber != null && !phoneNumber.isEmpty()) {
-                        try {
-                            Case.getCurrentCaseThrows().getSleuthkitCase().getCommunicationsManager().createAccountFileInstance(Account.Type.PHONE, phoneNumber,  NbBundle.getMessage(this.getClass(), "Firefox.parentModuleName"), profileFile);
-                        } catch (NoCurrentCaseException | TskCoreException ex) {
-                            logger.log(Level.SEVERE, String.format("Error creating phone number account instance for '%s' from Chrome profiles file '%s' .",
-                                phoneNumber, profileFile.getName()), ex); //NON-NLS
-                        } 
-                    }
-                    
-                } catch (TskCoreException ex) {
+                    helper.addWebFormAddress(name, email, phoneNumber, 
+                            mailingAddress, datetimeCreated, datetimeLastUsed, timesUsed);
+                } catch (TskCoreException | Blackboard.BlackboardException ex) {
                     logger.log(Level.SEVERE, "Error while trying to insert Firefox Autofill profile artifact{0}", ex); //NON-NLS
                     this.addErrorMessage(
                             NbBundle.getMessage(this.getClass(), "Firefox.getAutofillProfiles.errMsg.errAnalyzingFile4",
@@ -1003,10 +983,6 @@ class Firefox extends Extract {
             }
             dbFile.delete();
         }
-
-        IngestServices.getInstance().fireModuleDataEvent(new ModuleDataEvent(
-                NbBundle.getMessage(this.getClass(), "Firefox.parentModuleName"),
-                BlackboardArtifact.ARTIFACT_TYPE.TSK_WEB_FORM_ADDRESS, bbartifacts));
     }
        
     /**

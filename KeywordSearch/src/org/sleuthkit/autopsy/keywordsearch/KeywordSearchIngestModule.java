@@ -1,7 +1,7 @@
 /*
  * Autopsy Forensic Browser
  *
- * Copyright 2011-2018 Basis Technology Corp.
+ * Copyright 2011-2019 Basis Technology Corp.
  * Contact: carrier <at> sleuthkit <dot> org
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -19,13 +19,23 @@
 package org.sleuthkit.autopsy.keywordsearch;
 
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
+import com.google.common.io.CharSource;
+import java.io.IOException;
 import java.io.Reader;
+import java.text.ParseException;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
+import static java.util.Locale.US;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Level;
-import org.openide.util.Exceptions;
+import java.util.stream.Collectors;
+import org.apache.tika.mime.MimeTypes;
 import org.openide.util.Lookup;
 import org.openide.util.NbBundle;
 import org.openide.util.NbBundle.Messages;
@@ -33,6 +43,7 @@ import org.openide.util.lookup.Lookups;
 import org.sleuthkit.autopsy.casemodule.Case;
 import org.sleuthkit.autopsy.casemodule.NoCurrentCaseException;
 import org.sleuthkit.autopsy.coreutils.ExecUtil.ProcessTerminator;
+import org.sleuthkit.autopsy.coreutils.ExecUtil.TimedProcessTerminator;
 import org.sleuthkit.autopsy.coreutils.Logger;
 import org.sleuthkit.autopsy.coreutils.MessageNotifyUtil;
 import org.sleuthkit.autopsy.ingest.FileIngestModule;
@@ -42,15 +53,19 @@ import org.sleuthkit.autopsy.ingest.IngestMessage.MessageType;
 import org.sleuthkit.autopsy.ingest.IngestModuleReferenceCounter;
 import org.sleuthkit.autopsy.ingest.IngestServices;
 import org.sleuthkit.autopsy.keywordsearch.Ingester.IngesterException;
-import org.sleuthkit.autopsy.keywordsearch.TextFileExtractor.TextFileExtractorException;
 import org.sleuthkit.autopsy.keywordsearchservice.KeywordSearchService;
 import org.sleuthkit.autopsy.keywordsearchservice.KeywordSearchServiceException;
 import org.sleuthkit.autopsy.modules.filetypeid.FileTypeDetector;
 import org.sleuthkit.autopsy.textextractors.TextExtractor;
 import org.sleuthkit.autopsy.textextractors.TextExtractorFactory;
+import org.sleuthkit.autopsy.textextractors.TextFileExtractor;
 import org.sleuthkit.autopsy.textextractors.configs.ImageConfig;
 import org.sleuthkit.autopsy.textextractors.configs.StringsConfig;
 import org.sleuthkit.datamodel.AbstractFile;
+import org.sleuthkit.datamodel.Blackboard;
+import org.sleuthkit.datamodel.BlackboardArtifact;
+import org.sleuthkit.datamodel.BlackboardAttribute;
+import org.sleuthkit.datamodel.TskCoreException;
 import org.sleuthkit.datamodel.TskData;
 import org.sleuthkit.datamodel.TskData.FileKnown;
 
@@ -71,9 +86,11 @@ import org.sleuthkit.datamodel.TskData.FileKnown;
     "CannotRunFileTypeDetection=Unable to run file type detection."
 })
 public final class KeywordSearchIngestModule implements FileIngestModule {
-    
-    /** generally text extractors should ignore archives and let unpacking
-     * modules take care of them */
+
+    /**
+     * generally text extractors should ignore archives and let unpacking
+     * modules take care of them
+     */
     private static final List<String> ARCHIVE_MIME_TYPES
             = ImmutableList.of(
                     //ignore unstructured binary and compressed data, for which string extraction or unzipper works better
@@ -108,6 +125,26 @@ public final class KeywordSearchIngestModule implements FileIngestModule {
                     "application/x-lzop", //NON-NLS
                     "application/x-z", //NON-NLS
                     "application/x-compress"); //NON-NLS
+
+    private static final List<String> METADATA_DATE_TYPES
+            = ImmutableList.of(
+                    "Last-Save-Date", //NON-NLS
+                    "Last-Printed", //NON-NLS
+                    "Creation-Date"); //NON-NLS
+
+    private static final Map<String, BlackboardAttribute.ATTRIBUTE_TYPE> METADATA_TYPES_MAP = ImmutableMap.<String, BlackboardAttribute.ATTRIBUTE_TYPE>builder()  
+                    .put("Last-Save-Date", BlackboardAttribute.ATTRIBUTE_TYPE.TSK_DATETIME_MODIFIED) 
+                    .put("Last-Author", BlackboardAttribute.ATTRIBUTE_TYPE.TSK_USER_ID) 
+                    .put("Creation-Date", BlackboardAttribute.ATTRIBUTE_TYPE.TSK_DATETIME_CREATED) 
+                    .put("Company", BlackboardAttribute.ATTRIBUTE_TYPE.TSK_ORGANIZATION) 
+                    .put("Author", BlackboardAttribute.ATTRIBUTE_TYPE.TSK_OWNER)
+                    .put("Application-Name", BlackboardAttribute.ATTRIBUTE_TYPE.TSK_PROG_NAME)
+                    .put("Last-Printed", BlackboardAttribute.ATTRIBUTE_TYPE.TSK_LAST_PRINTED_DATETIME)
+                    .put("Producer", BlackboardAttribute.ATTRIBUTE_TYPE.TSK_PROG_NAME) 
+                    .put("Title", BlackboardAttribute.ATTRIBUTE_TYPE.TSK_DESCRIPTION) 
+                    .put("pdf:PDFVersion", BlackboardAttribute.ATTRIBUTE_TYPE.TSK_VERSION)
+                   .build();
+
     
     /**
      * Options for this extractor
@@ -116,7 +153,6 @@ public final class KeywordSearchIngestModule implements FileIngestModule {
         EXTRACT_UTF16, ///< extract UTF16 text, true/false
         EXTRACT_UTF8, ///< extract UTF8 text, true/false
     };
-
 
     enum UpdateFrequency {
 
@@ -170,8 +206,8 @@ public final class KeywordSearchIngestModule implements FileIngestModule {
      * for final statistics at the end of the job.
      *
      * @param ingestJobId id of ingest job
-     * @param fileId      id of file
-     * @param status      ingest status of the file
+     * @param fileId id of file
+     * @param status ingest status of the file
      */
     private static void putIngestStatus(long ingestJobId, long fileId, IngestStatus status) {
         synchronized (ingestStatus) {
@@ -213,9 +249,6 @@ public final class KeywordSearchIngestModule implements FileIngestModule {
 
         try {
             Index indexInfo = server.getIndexInfo();
-            if (!IndexFinder.getCurrentSolrVersion().equals(indexInfo.getSolrVersion())) {
-                throw new IngestModuleException(Bundle.KeywordSearchIngestModule_startupException_indexSolrVersionNotSupported(indexInfo.getSolrVersion()));
-            }
             if (!indexInfo.isCompatible(IndexFinder.getCurrentSchemaVersion())) {
                 throw new IngestModuleException(Bundle.KeywordSearchIngestModule_startupException_indexSchemaNotSupported(indexInfo.getSchemaVersion()));
             }
@@ -260,7 +293,7 @@ public final class KeywordSearchIngestModule implements FileIngestModule {
             } else {
                 // for single-user cases need to verify connection to local SOLR service
                 try {
-                    if (!server.isRunning()) {
+                    if (!server.isLocalSolrRunning()) {
                         throw new IngestModuleException(Bundle.KeywordSearchIngestModule_init_tryStopSolrMsg(Bundle.KeywordSearchIngestModule_init_badInitMsg()));
                     }
                 } catch (KeywordSearchModuleException ex) {
@@ -290,15 +323,15 @@ public final class KeywordSearchIngestModule implements FileIngestModule {
                 }
             }
         }
-        
+
         StringsConfig stringsConfig = new StringsConfig();
         Map<String, String> stringsOptions = KeywordSearchSettings.getStringExtractOptions();
         stringsConfig.setExtractUTF8(Boolean.parseBoolean(stringsOptions.get(StringsExtractOptions.EXTRACT_UTF8.toString())));
         stringsConfig.setExtractUTF16(Boolean.parseBoolean(stringsOptions.get(StringsExtractOptions.EXTRACT_UTF16.toString())));
         stringsConfig.setLanguageScripts(KeywordSearchSettings.getStringExtractScripts());
-        
+
         stringsExtractionContext = Lookups.fixed(stringsConfig);
-        
+
         indexer = new Indexer();
         initialized = true;
     }
@@ -469,36 +502,144 @@ public final class KeywordSearchIngestModule implements FileIngestModule {
          * streaming) from the file Divide the file into chunks and index the
          * chunks
          *
-         * @param aFile          file to extract strings from, divide into
-         *                       chunks and index
-         * @param detectedFormat mime-type detected, or null if none detected
+         * @param aFile file to extract strings from, divide into chunks and
+         * index
+         * @param extractedMetadata Map that will be populated with the file's metadata.
          *
          * @return true if the file was text_ingested, false otherwise
          *
          * @throws IngesterException exception thrown if indexing failed
          */
-        private boolean extractTextAndIndex(AbstractFile aFile, String detectedFormat) throws IngesterException {
+        private boolean extractTextAndIndex(AbstractFile aFile, Map<String, String> extractedMetadata) throws IngesterException {
             ImageConfig imageConfig = new ImageConfig();
             imageConfig.setOCREnabled(KeywordSearchSettings.getOcrOption());
             ProcessTerminator terminator = () -> context.fileIngestIsCancelled();
             Lookup extractionContext = Lookups.fixed(imageConfig, terminator);
-            
+
             try {
-                TextExtractor extractor = TextExtractorFactory.getExtractor(aFile,extractionContext);
-                Reader extractedTextReader = extractor.getReader();
+                TextExtractor extractor = TextExtractorFactory.getExtractor(aFile, extractionContext);
+                Reader fileText = extractor.getReader();
+
+                Reader finalReader;
+                try {
+                    Map<String, String> metadata = extractor.getMetadata();
+                    if (!metadata.isEmpty()) {
+                        // Creating the metadata artifact here causes occasional problems
+                        // when indexing the text, so we save the metadata map to 
+                        // use after this method is complete.
+                        extractedMetadata.putAll(metadata);
+                    }
+                    CharSource formattedMetadata = getMetaDataCharSource(metadata);
+                    //Append the metadata to end of the file text
+                    finalReader = CharSource.concat(new CharSource() {
+                        //Wrap fileText reader for concatenation
+                        @Override
+                        public Reader openStream() throws IOException {
+                            return fileText;
+                        }
+                    }, formattedMetadata).openStream();
+                } catch (IOException ex) {
+                    logger.log(Level.WARNING, String.format("Could not format extracted metadata for file %s [id=%d]",
+                            aFile.getName(), aFile.getId()), ex);
+                    //Just send file text.
+                    finalReader = fileText;
+                }
                 //divide into chunks and index
-                return Ingester.getDefault().indexText(extractedTextReader,aFile.getId(),aFile.getName(), aFile, context);
+                return Ingester.getDefault().indexText(finalReader, aFile.getId(), aFile.getName(), aFile, context);
             } catch (TextExtractorFactory.NoTextExtractorFound | TextExtractor.InitReaderException ex) {
                 //No text extractor found... run the default instead
                 return false;
             }
+        }
+        
+        private void createMetadataArtifact(AbstractFile aFile, Map<String, String> metadata) {
+    
+            String moduleName = KeywordSearchIngestModule.class.getName();
+            
+            Collection<BlackboardAttribute> attributes = new ArrayList<>(); 
+            Collection<BlackboardArtifact> bbartifacts = new ArrayList<>();
+            for (Map.Entry<String, String> entry : metadata.entrySet()) {
+                if (METADATA_TYPES_MAP.containsKey(entry.getKey())) {
+                    BlackboardAttribute bba = checkAttribute(entry.getKey(), entry.getValue());
+                    if (bba != null) {
+                        attributes.add(bba);
+                    }
+                }
+            }
+            if (!attributes.isEmpty()) {
+                try {
+                    BlackboardArtifact bbart = aFile.newArtifact(BlackboardArtifact.ARTIFACT_TYPE.TSK_METADATA);
+                    bbart.addAttributes(attributes);
+                    bbartifacts.add(bbart);
+                } catch (TskCoreException ex) {
+                    // Log error and return to continue processing
+                   logger.log(Level.WARNING, String.format("Error creating or adding metadata artifact for file %s.", aFile.getParentPath() + aFile.getName()), ex); //NON-NLS
+                   return;
+                }
+                if (!bbartifacts.isEmpty()) {
+                    try{
+                        Case.getCurrentCaseThrows().getSleuthkitCase().getBlackboard().postArtifacts(bbartifacts, moduleName);
+                    } catch (NoCurrentCaseException | Blackboard.BlackboardException ex) {
+                        // Log error and return to continue processing
+                        logger.log(Level.WARNING, String.format("Unable to post blackboard artifacts for file $s.", aFile.getParentPath() + aFile.getName()) , ex); //NON-NLS
+                        return;
+                    }
+                }
+            }
+        }
+        
+
+        private BlackboardAttribute checkAttribute(String key, String value) {
+            String moduleName = KeywordSearchIngestModule.class.getName();
+            if (!value.isEmpty() && value.charAt(0) != ' ') { 
+                if (METADATA_DATE_TYPES.contains(key)) {
+                    SimpleDateFormat metadataDateFormat = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", US);    
+                    Long metadataDateTime = Long.valueOf(0);
+                    try {
+                        String metadataDate = value.replaceAll("T"," ").replaceAll("Z", "");
+                        Date usedDate = metadataDateFormat.parse(metadataDate);
+                        metadataDateTime = usedDate.getTime()/1000;
+                        return new BlackboardAttribute(METADATA_TYPES_MAP.get(key), moduleName, metadataDateTime);
+                    } catch (ParseException ex) {
+                        // catching error and displaying date that could not be parsed then will continue on.
+                        logger.log(Level.WARNING, String.format("Failed to parse date/time %s for metadata attribute %s.", value, key), ex); //NON-NLS
+                        return null;
+                    }
+                } else {
+                    return new BlackboardAttribute(METADATA_TYPES_MAP.get(key), moduleName, value);
+                }
+            }
+            
+            return null;
+
+        }
+    
+    
+        /**
+         * Pretty print the text extractor metadata.
+         *
+         * @param metadata The Metadata map to wrap as a CharSource
+         *
+         * @return A CharSource for the given Metadata
+         */
+        @NbBundle.Messages({
+            "KeywordSearchIngestModule.metadataTitle=METADATA"
+        })
+        private CharSource getMetaDataCharSource(Map<String, String> metadata) {
+            return CharSource.wrap(new StringBuilder(
+                    String.format("\n\n------------------------------%s------------------------------\n\n",
+                            Bundle.KeywordSearchIngestModule_metadataTitle()))
+                    .append(metadata.entrySet().stream().sorted(Map.Entry.comparingByKey())
+                            .map(entry -> entry.getKey() + ": " + entry.getValue())
+                            .collect(Collectors.joining("\n"))
+                    ));
         }
 
         /**
          * Extract strings using heuristics from the file and add to index.
          *
          * @param aFile file to extract strings from, divide into chunks and
-         *              index
+         * index
          *
          * @return true if the file was text_ingested, false otherwise
          */
@@ -509,7 +650,7 @@ public final class KeywordSearchIngestModule implements FileIngestModule {
                 }
                 TextExtractor stringsExtractor = TextExtractorFactory.getStringsExtractor(aFile, stringsExtractionContext);
                 Reader extractedTextReader = stringsExtractor.getReader();
-                if (Ingester.getDefault().indexText(extractedTextReader,aFile.getId(),aFile.getName(), aFile, KeywordSearchIngestModule.this.context)) {
+                if (Ingester.getDefault().indexStrings(extractedTextReader, aFile.getId(), aFile.getName(), aFile, KeywordSearchIngestModule.this.context)) {
                     putIngestStatus(jobId, aFile.getId(), IngestStatus.STRINGS_INGESTED);
                     return true;
                 } else {
@@ -527,17 +668,25 @@ public final class KeywordSearchIngestModule implements FileIngestModule {
         /**
          * Adds the file to the index. Detects file type, calls extractors, etc.
          *
-         * @param aFile        File to analyze
+         * @param aFile File to analyze
          * @param indexContent False if only metadata should be text_ingested.
-         *                     True if content and metadata should be index.
+         * True if content and metadata should be index.
          */
         private void indexFile(AbstractFile aFile, boolean indexContent) {
             //logger.log(Level.INFO, "Processing AbstractFile: " + abstractFile.getName());
 
             TskData.TSK_DB_FILES_TYPE_ENUM aType = aFile.getType();
 
-            // unallocated and unused blocks can only have strings extracted from them. 
-            if ((aType.equals(TskData.TSK_DB_FILES_TYPE_ENUM.UNALLOC_BLOCKS) || aType.equals(TskData.TSK_DB_FILES_TYPE_ENUM.UNUSED_BLOCKS))) {
+            /**
+             * Extract unicode strings from unallocated and unused blocks and
+             * carved text files. The reason for performing string extraction
+             * on these is because they all may contain multiple encodings which
+             * can cause text to be missed by the more specialized text extractors
+             * used below.
+             */
+            if ((aType.equals(TskData.TSK_DB_FILES_TYPE_ENUM.UNALLOC_BLOCKS)
+                    || aType.equals(TskData.TSK_DB_FILES_TYPE_ENUM.UNUSED_BLOCKS))
+                    || (aType.equals(TskData.TSK_DB_FILES_TYPE_ENUM.CARVED) && aFile.getNameExtension().equalsIgnoreCase("txt"))) {
                 if (context.fileIngestIsCancelled()) {
                     return;
                 }
@@ -584,6 +733,7 @@ public final class KeywordSearchIngestModule implements FileIngestModule {
             }
 
             boolean wasTextAdded = false;
+            Map<String, String> extractedMetadata = new HashMap<>();
 
             //extract text with one of the extractors, divide into chunks and index with Solr
             try {
@@ -591,11 +741,11 @@ public final class KeywordSearchIngestModule implements FileIngestModule {
                 if (context.fileIngestIsCancelled()) {
                     return;
                 }
-                if (fileType.equals("application/octet-stream")) {
+                if (fileType.equals(MimeTypes.OCTET_STREAM)) {
                     extractStringsAndIndex(aFile);
                     return;
                 }
-                if (!extractTextAndIndex(aFile, fileType)) {
+                if (!extractTextAndIndex(aFile, extractedMetadata)) {
                     // Text extractor not found for file. Extract string only.
                     putIngestStatus(jobId, aFile.getId(), IngestStatus.SKIPPED_ERROR_TEXTEXTRACT);
                 } else {
@@ -616,22 +766,43 @@ public final class KeywordSearchIngestModule implements FileIngestModule {
             if ((wasTextAdded == false) && (aFile.getNameExtension().equalsIgnoreCase("txt") && !(aFile.getType().equals(TskData.TSK_DB_FILES_TYPE_ENUM.CARVED)))) {
                 //Carved Files should be the only type of unallocated files capable of a txt extension and 
                 //should be ignored by the TextFileExtractor because they may contain more than one text encoding
-                try {
-                    TextFileExtractor textFileExtractor = new TextFileExtractor();
-                    Reader textReader = textFileExtractor.getReader(aFile);
-                    if (Ingester.getDefault().indexText(textReader, aFile.getId(), aFile.getName(), aFile, context)) {
-                        putIngestStatus(jobId, aFile.getId(), IngestStatus.TEXT_INGESTED);
-                        wasTextAdded = true;
-                    }
-                } catch (IngesterException | TextFileExtractorException ex) {
-                    logger.log(Level.WARNING, "Unable to index as unicode", ex);
-                }
+                wasTextAdded = indexTextFile(aFile);
             }
 
             // if it wasn't supported or had an error, default to strings
             if (wasTextAdded == false) {
                 extractStringsAndIndex(aFile);
             }
+            
+            // Now that the indexing is complete, create the metadata artifact (if applicable).
+            // It is unclear why calling this from extractTextAndIndex() generates
+            // errors.
+            if (!extractedMetadata.isEmpty()) {
+                createMetadataArtifact(aFile, extractedMetadata);
+            }
+        }
+
+        /**
+         * Adds the text file to the index given an encoding.
+         * Returns true if indexing was successful and false otherwise.
+         *
+         * @param aFile Text file to analyze
+         */
+        private boolean indexTextFile(AbstractFile aFile) {
+            try {
+                TextFileExtractor textFileExtractor = new TextFileExtractor(aFile);
+                Reader textReader = textFileExtractor.getReader();
+                if (textReader == null) {
+                    logger.log(Level.INFO, "Unable to extract with TextFileExtractor, Reader was null for file: {0}", aFile.getName());
+                } else if (Ingester.getDefault().indexText(textReader, aFile.getId(), aFile.getName(), aFile, context)) {
+                    textReader.close();
+                    putIngestStatus(jobId, aFile.getId(), IngestStatus.TEXT_INGESTED);
+                    return true;
+                }
+            } catch (IngesterException | IOException | TextExtractor.InitReaderException ex) {
+                logger.log(Level.WARNING, "Unable to index " + aFile.getName(), ex);
+            }
+            return false;
         }
     }
 }

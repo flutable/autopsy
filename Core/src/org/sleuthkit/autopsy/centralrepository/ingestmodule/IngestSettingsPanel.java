@@ -22,7 +22,7 @@ import org.sleuthkit.autopsy.ingest.IngestModuleIngestJobSettings;
 import org.sleuthkit.autopsy.ingest.IngestModuleIngestJobSettingsPanel;
 
 /**
- * Ingest job settings panel for the Correlation Engine module.
+ * Ingest job settings panel for the Central Repository module.
  */
 @SuppressWarnings("PMD.SingularField") // UI widgets cause lots of false positives
 final class IngestSettingsPanel extends IngestModuleIngestJobSettingsPanel {
@@ -65,7 +65,7 @@ final class IngestSettingsPanel extends IngestModuleIngestJobSettingsPanel {
         flagPreviouslySeenDevicesCheckbox = new javax.swing.JCheckBox();
         createCorrelationPropertiesCheckbox = new javax.swing.JCheckBox();
 
-        ingestSettingsLabel.setFont(new java.awt.Font("Tahoma", 1, 11)); // NOI18N
+        ingestSettingsLabel.setFont(ingestSettingsLabel.getFont().deriveFont(ingestSettingsLabel.getFont().getStyle() | java.awt.Font.BOLD));
         org.openide.awt.Mnemonics.setLocalizedText(ingestSettingsLabel, org.openide.util.NbBundle.getMessage(IngestSettingsPanel.class, "IngestSettingsPanel.ingestSettingsLabel.text")); // NOI18N
 
         org.openide.awt.Mnemonics.setLocalizedText(flagTaggedNotableItemsCheckbox, org.openide.util.NbBundle.getMessage(IngestSettingsPanel.class, "IngestSettingsPanel.flagTaggedNotableItemsCheckbox.text")); // NOI18N
@@ -88,7 +88,7 @@ final class IngestSettingsPanel extends IngestModuleIngestJobSettingsPanel {
                             .addComponent(flagTaggedNotableItemsCheckbox, javax.swing.GroupLayout.DEFAULT_SIZE, javax.swing.GroupLayout.DEFAULT_SIZE, Short.MAX_VALUE)
                             .addComponent(flagPreviouslySeenDevicesCheckbox, javax.swing.GroupLayout.DEFAULT_SIZE, javax.swing.GroupLayout.DEFAULT_SIZE, Short.MAX_VALUE)
                             .addComponent(createCorrelationPropertiesCheckbox, javax.swing.GroupLayout.DEFAULT_SIZE, javax.swing.GroupLayout.DEFAULT_SIZE, Short.MAX_VALUE))))
-                .addContainerGap(65, Short.MAX_VALUE))
+                .addContainerGap(47, Short.MAX_VALUE))
         );
         layout.setVerticalGroup(
             layout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
@@ -101,7 +101,7 @@ final class IngestSettingsPanel extends IngestModuleIngestJobSettingsPanel {
                 .addComponent(flagTaggedNotableItemsCheckbox)
                 .addPreferredGap(javax.swing.LayoutStyle.ComponentPlacement.RELATED)
                 .addComponent(flagPreviouslySeenDevicesCheckbox)
-                .addContainerGap(197, Short.MAX_VALUE))
+                .addContainerGap(47, Short.MAX_VALUE))
         );
     }// </editor-fold>//GEN-END:initComponents
 

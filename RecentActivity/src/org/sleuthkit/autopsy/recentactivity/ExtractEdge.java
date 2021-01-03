@@ -2,7 +2,7 @@
  *
  * Autopsy Forensic Browser
  *
- * Copyright 2019 Basis Technology Corp.
+ * Copyright 2019-2020 Basis Technology Corp.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,15 +24,20 @@ import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.Date;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
+import java.text.DateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Scanner;
 import java.util.logging.Level;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import org.openide.modules.InstalledFileLocator;
 import org.openide.util.NbBundle.Messages;
 import org.sleuthkit.autopsy.casemodule.Case;
@@ -46,8 +51,6 @@ import org.sleuthkit.autopsy.datamodel.ContentUtils;
 import org.sleuthkit.autopsy.ingest.DataSourceIngestModuleProcessTerminator;
 import org.sleuthkit.autopsy.ingest.DataSourceIngestModuleProgress;
 import org.sleuthkit.autopsy.ingest.IngestJobContext;
-import org.sleuthkit.autopsy.ingest.IngestServices;
-import org.sleuthkit.autopsy.ingest.ModuleDataEvent;
 import org.sleuthkit.datamodel.AbstractFile;
 import org.sleuthkit.datamodel.BlackboardArtifact;
 import org.sleuthkit.datamodel.Content;
@@ -59,7 +62,6 @@ import org.sleuthkit.datamodel.TskCoreException;
 final class ExtractEdge extends Extract {
 
     private static final Logger LOG = Logger.getLogger(ExtractEdge.class.getName());
-    private final IngestServices services = IngestServices.getInstance();
     private final Path moduleTempResultPath;
     private Content dataSource;
     private IngestJobContext context;
@@ -102,7 +104,9 @@ final class ExtractEdge extends Extract {
     private static final String ESE_TOOL_FOLDER = "ESEDatabaseView"; //NON-NLS
     private static final String EDGE_RESULT_FOLDER_NAME = "results"; //NON-NLS
 
-    private static final SimpleDateFormat DATE_FORMATTER = new SimpleDateFormat("MM/dd/yyyy hh:mm:ss a"); //NON-NLS
+    // ESEDatabaseView converts long timestamps into a string based on the current locale,
+    // so the default format may not always work.
+    private SimpleDateFormat previouslyValidDateFormat = null;
 
     @Messages({
         "ExtractEdge_process_errMsg_unableFindESEViewer=Unable to find ESEDatabaseViewer",
@@ -165,24 +169,24 @@ final class ExtractEdge extends Extract {
 
         final String esedumper = getPathForESEDumper();
         if (esedumper == null) {
-            this.addErrorMessage(Bundle.ExtractEdge_process_errMsg_unableFindESEViewer());
             LOG.log(Level.SEVERE, "Error finding ESEDatabaseViewer program"); //NON-NLS
+            this.addErrorMessage(Bundle.ExtractEdge_process_errMsg_unableFindESEViewer());
             return; //If we cannot find the ESEDatabaseView we cannot proceed
         }
 
         try {
             this.processWebCacheDbFile(esedumper, webCacheFiles, progressBar);
         } catch (IOException | TskCoreException ex) {
+            LOG.log(Level.SEVERE, "Error processing 'WebCacheV01.dat' files for Microsoft Edge", ex); // NON-NLS
             this.addErrorMessage(Bundle.ExtractEdge_process_errMsg_webcacheFail());
-            LOG.log(Level.SEVERE, "Error returned from processWebCacheDbFile", ex); // NON-NLS
         }
 
         progressBar.progress(Bundle.Progress_Message_Edge_Bookmarks());
         try {
             this.processSpartanDbFile(esedumper, spartanFiles);
         } catch (IOException | TskCoreException ex) {
+            LOG.log(Level.SEVERE, "Error processing 'spartan.edb' files for Microsoft Edge", ex); // NON-NLS
             this.addErrorMessage(Bundle.ExtractEdge_process_errMsg_spartanFail());
-            LOG.log(Level.SEVERE, "Error returned from processSpartanDbFile", ex); // NON-NLS
         }
     }
 
@@ -311,6 +315,10 @@ final class ExtractEdge extends Extract {
         }
 
         for (File file : historyFiles) {
+            if (context.dataSourceIngestIsCancelled()) {
+                return;
+            }
+            
             Scanner fileScanner;
             try {
                 fileScanner = new Scanner(new FileInputStream(file.toString()));
@@ -324,6 +332,10 @@ final class ExtractEdge extends Extract {
             try {
                 List<String> headers = null;
                 while (fileScanner.hasNext()) {
+                    if (context.dataSourceIngestIsCancelled()) {
+                        return;
+                    }
+                    
                     String line = fileScanner.nextLine();
                     if (headers == null) {
                         headers = Arrays.asList(line.toLowerCase().split(","));
@@ -334,7 +346,6 @@ final class ExtractEdge extends Extract {
                         BlackboardArtifact ba = getHistoryArtifact(origFile, headers, line);
                         if (ba != null) {
                             bbartifacts.add(ba);
-                            this.indexArtifact(ba);
                         }
                     }
                 }
@@ -343,9 +354,7 @@ final class ExtractEdge extends Extract {
             }
 
             if (!bbartifacts.isEmpty()) {
-                services.fireModuleDataEvent(new ModuleDataEvent(
-                        RecentActivityExtracterModuleFactory.getModuleName(),
-                        BlackboardArtifact.ARTIFACT_TYPE.TSK_WEB_HISTORY, bbartifacts));
+                postArtifacts(bbartifacts);
             }
         }
     }
@@ -384,7 +393,6 @@ final class ExtractEdge extends Extract {
                 BlackboardArtifact ba = getBookmarkArtifact(origFile, headers, line);
                 if (ba != null) {
                     bbartifacts.add(ba);
-                    this.indexArtifact(ba);
                 }
             }
         } finally {
@@ -392,9 +400,7 @@ final class ExtractEdge extends Extract {
         }
 
         if (!bbartifacts.isEmpty()) {
-            services.fireModuleDataEvent(new ModuleDataEvent(
-                    RecentActivityExtracterModuleFactory.getModuleName(),
-                    BlackboardArtifact.ARTIFACT_TYPE.TSK_WEB_HISTORY, bbartifacts));
+            postArtifacts(bbartifacts);
         }
     }
 
@@ -413,6 +419,10 @@ final class ExtractEdge extends Extract {
         }
 
         for (File file : containerFiles) {
+            if (context.dataSourceIngestIsCancelled()) {
+                return;
+            }
+            
             Scanner fileScanner;
             try {
                 fileScanner = new Scanner(new FileInputStream(file.toString()));
@@ -426,6 +436,10 @@ final class ExtractEdge extends Extract {
             try {
                 List<String> headers = null;
                 while (fileScanner.hasNext()) {
+                    if (context.dataSourceIngestIsCancelled()) {
+                        return;
+                    }
+                    
                     String line = fileScanner.nextLine();
                     if (headers == null) {
                         headers = Arrays.asList(line.toLowerCase().split(","));
@@ -435,7 +449,6 @@ final class ExtractEdge extends Extract {
                     BlackboardArtifact ba = getCookieArtifact(origFile, headers, line);
                     if (ba != null) {
                         bbartifacts.add(ba);
-                        this.indexArtifact(ba);
                     }
                 }
             } finally {
@@ -443,9 +456,7 @@ final class ExtractEdge extends Extract {
             }
 
             if (!bbartifacts.isEmpty()) {
-                services.fireModuleDataEvent(new ModuleDataEvent(
-                        RecentActivityExtracterModuleFactory.getModuleName(),
-                        BlackboardArtifact.ARTIFACT_TYPE.TSK_WEB_HISTORY, bbartifacts));
+                postArtifacts(bbartifacts);
             }
         }
     }
@@ -468,6 +479,10 @@ final class ExtractEdge extends Extract {
         }
 
         for (File file : downloadFiles) {
+            if (context.dataSourceIngestIsCancelled()) {
+                return;
+            }
+            
             Scanner fileScanner;
             try {
                 fileScanner = new Scanner(new FileInputStream(file.toString()));
@@ -480,6 +495,10 @@ final class ExtractEdge extends Extract {
             try {
                 List<String> headers = null;
                 while (fileScanner.hasNext()) {
+                    if (context.dataSourceIngestIsCancelled()) {
+                        return;
+                    }
+                    
                     String line = fileScanner.nextLine();
                     if (headers == null) {
                         headers = Arrays.asList(line.toLowerCase().split(","));
@@ -491,7 +510,6 @@ final class ExtractEdge extends Extract {
                         BlackboardArtifact ba = getDownloadArtifact(origFile, headers, line);
                         if (ba != null) {
                             bbartifacts.add(ba);
-                            this.indexArtifact(ba);
                         }
                     }
                 }
@@ -499,11 +517,7 @@ final class ExtractEdge extends Extract {
                 fileScanner.close();
             }
 
-            if (!bbartifacts.isEmpty()) {
-                services.fireModuleDataEvent(new ModuleDataEvent(
-                        RecentActivityExtracterModuleFactory.getModuleName(),
-                        BlackboardArtifact.ARTIFACT_TYPE.TSK_WEB_DOWNLOAD, bbartifacts));
-            }
+            postArtifacts(bbartifacts);
         }
     }
 
@@ -577,7 +591,7 @@ final class ExtractEdge extends Extract {
         processBuilder.redirectOutput(outputFilePath.toFile());
         processBuilder.redirectError(errFilePath.toFile());
 
-        ExecUtil.execute(processBuilder, new DataSourceIngestModuleProcessTerminator(context));
+        ExecUtil.execute(processBuilder, new DataSourceIngestModuleProcessTerminator(context, true));
     }
 
     /**
@@ -602,13 +616,7 @@ final class ExtractEdge extends Extract {
 
         index = headers.indexOf(EDGE_HEAD_ACCESSTIME);
         String accessTime = rowSplit[index].trim();
-        Long ftime = null;
-        try {
-            Long epochtime = DATE_FORMATTER.parse(accessTime).getTime();
-            ftime = epochtime / 1000;
-        } catch (ParseException ex) {
-            LOG.log(Level.WARNING, "The Accessed Time format in history file seems invalid " + accessTime, ex); //NON-NLS
-        }
+        Long ftime = parseTimestamp(accessTime);
 
         BlackboardArtifact bbart = origFile.newArtifact(BlackboardArtifact.ARTIFACT_TYPE.TSK_WEB_HISTORY);
 
@@ -633,13 +641,7 @@ final class ExtractEdge extends Extract {
         String[] lineSplit = line.split(","); // NON-NLS
 
         String accessTime = lineSplit[headers.indexOf(EDGE_HEAD_LASTMOD)].trim();
-        Long ftime = null;
-        try {
-            Long epochtime = DATE_FORMATTER.parse(accessTime).getTime();
-            ftime = epochtime / 1000;
-        } catch (ParseException ex) {
-            LOG.log(Level.WARNING, "The Accessed Time format in history file seems invalid " + accessTime, ex); //NON-NLS
-        }
+        Long ftime = parseTimestamp(accessTime);
 
         String domain = lineSplit[headers.indexOf(EDGE_HEAD_RDOMAIN)].trim();
         String name = hexToChar(lineSplit[headers.indexOf(EDGE_HEAD_NAME)].trim());
@@ -700,6 +702,115 @@ final class ExtractEdge extends Extract {
         bbart.addAttributes(createBookmarkAttributes(url, title, null,
                 this.getName(), NetworkUtils.extractDomain(url)));
         return bbart;
+    }
+    
+
+    /**
+     * Attempt to parse the timestamp.
+     * 
+     * ESEDatabaseView makes timestamps based on the locale of the machine so
+     * they will not always be in the expected format. Additionally, the format
+     * used in the database output does not appear to match the default format
+     * using DateFormat.SHORT. Therefore, if the default US format doesn't work,
+     * we will attempt to determine the correct pattern to use and save any
+     * working pattern for the next attempt.
+     * 
+     * @param timeStr The date/time string to parse
+     * 
+     * @return The epoch time as a Long or null if it could not be parsed.
+     */
+    private Long parseTimestamp(String timeStr) {
+        
+        // If we had a pattern that worked on the last date, use it again.
+        if (previouslyValidDateFormat != null) {
+            try {
+                return previouslyValidDateFormat.parse(timeStr).getTime() / 1000;
+            } catch (ParseException ex) {
+                // Continue on to format detection
+            }
+        }
+        
+        // Try the default US pattern
+        try {
+            SimpleDateFormat usDateFormat = new SimpleDateFormat("MM/dd/yyyy hh:mm:ss a"); //NON-NLS
+            usDateFormat.setLenient(false); // Fail if month or day are out of range
+            Long epochTime = usDateFormat.parse(timeStr).getTime();
+            previouslyValidDateFormat = usDateFormat;
+            return epochTime / 1000;
+        } catch (ParseException ex) {
+            // Continue on to format detection
+        }
+        
+        // This generally doesn't match the data in the file but can give information on whether
+        // the month or day is first.
+        boolean monthFirstFromLocale = true;
+        String localeDatePattern = ((SimpleDateFormat) DateFormat.getDateInstance(
+                        DateFormat.SHORT, Locale.getDefault())).toPattern();
+        if (localeDatePattern.startsWith("d")) {
+            monthFirstFromLocale = false;
+        }
+
+        // Try to determine if the month or day is first by looking at the data. 
+        // If both variations appear valid, use the locale result.
+        boolean monthFirst = monthFirstFromLocale;
+        Pattern pattern = Pattern.compile("^([0-9]{1,2})[^0-9]([0-9]{1,2})");
+        Matcher matcher = pattern.matcher(timeStr);
+        if (matcher.find()) {
+            int firstVal = Integer.parseInt(matcher.group(1));
+            int secondVal = Integer.parseInt(matcher.group(2));
+            
+            if (firstVal > 12) {
+                monthFirst = false; 
+            } else if (secondVal > 12) {
+                monthFirst = true;
+            } 
+            // Otherwise keep the setting from the locale
+        }
+        
+        // See if the time has AM/PM attached
+        boolean hasAmPm = false;
+        if (timeStr.endsWith("M") || timeStr.endsWith("m")) {
+            hasAmPm = true;
+        }
+        
+        // See if the date appears to use forward slashes. If not, assume '.' is being used.
+        boolean hasSlashes = false;
+        if (timeStr.contains("/")) {
+            hasSlashes = true;
+        }
+        
+        // Make our best guess at the pattern
+        String dateFormatPattern;
+        if (monthFirst) {
+            if (hasSlashes) {
+                dateFormatPattern = "MM/dd/yyyy ";
+            } else {
+                dateFormatPattern = "MM.dd.yyyy ";
+            }
+        } else {
+             if (hasSlashes) {
+                dateFormatPattern = "dd/MM/yyyy ";
+            } else {
+                dateFormatPattern = "dd.MM.yyyy ";
+            }           
+        }
+        
+        if (hasAmPm) {
+            dateFormatPattern += "hh:mm:ss a";
+        } else {
+            dateFormatPattern += "HH:mm:ss";
+        }
+        
+        try {
+            SimpleDateFormat dateFormat = new SimpleDateFormat(dateFormatPattern); //NON-NLS
+            dateFormat.setLenient(false); // Fail if month or day are out of range
+            Long epochTime = dateFormat.parse(timeStr).getTime();
+            previouslyValidDateFormat = dateFormat;
+            return epochTime / 1000;
+        } catch (ParseException ex) {
+            LOG.log(Level.WARNING, "Timestamp could not be parsed ({0})", timeStr); //NON-NLS
+            return null;
+        }
     }
 
     /**
@@ -809,7 +920,7 @@ final class ExtractEdge extends Extract {
 
     /**
      * Opens and reads the Containers table to create a table of information
-     * about which of the Continer_xx files contain which type of information.
+     * about which of the Container_xx files contain which type of information.
      *
      * Each row of the "Containers" table describes one of the Container_xx
      * files.

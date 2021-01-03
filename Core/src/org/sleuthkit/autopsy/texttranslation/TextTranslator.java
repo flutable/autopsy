@@ -1,7 +1,7 @@
 /*
  * Autopsy Forensic Browser
  *
- * Copyright 2018-2018 Basis Technology Corp.
+ * Copyright 2018-2019 Basis Technology Corp.
  * Contact: carrier <at> sleuthkit <dot> org
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -18,12 +18,51 @@
  */
 package org.sleuthkit.autopsy.texttranslation;
 
+import javax.swing.JPanel;
+
 /**
  * Interface for creating text translators. Implementing classes will be picked
  * up and run by the Text Translation Service.
  */
 public interface TextTranslator {
 
+    /**
+     * Translates a provided string
+     *
+     * @param input the String to translate
+     *
+     * @return the translated String
+     *
+     * @throws TranslationException
+     */
     String translate(String input) throws TranslationException;
-    
+
+    /**
+     * Get the name of the TextTranslator implementation
+     *
+     * @return the name of the TextTranslator
+     */
+    String getName();
+
+    /**
+     * Get the JPanel to display on the settings options panel when this
+     * TextTranslator is selected
+     *
+     * @return the panel which displays the settings options
+     */
+    JPanel getSettingsPanel();
+
+    /**
+     * Saves the current state of the settings in the settings panel.
+     *
+     * @throws TranslationConfigException
+     */
+    void saveSettings() throws TranslationConfigException;
+
+    /**
+     * Gets the maximum number of characters allowed in a translation request.
+     *
+     * @return The maximum character count.
+     */
+    int getMaxTextChars();
 }

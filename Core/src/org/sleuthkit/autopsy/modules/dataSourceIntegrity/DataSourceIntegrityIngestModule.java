@@ -1,7 +1,7 @@
 /*
  * Autopsy Forensic Browser
  *
- * Copyright 2013-2018 Basis Technology Corp.
+ * Copyright 2013-2019 Basis Technology Corp.
  * Contact: carrier <at> sleuthkit <dot> org
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -32,12 +32,12 @@ import org.sleuthkit.autopsy.ingest.IngestJobContext;
 import org.sleuthkit.autopsy.ingest.IngestMessage;
 import org.sleuthkit.autopsy.ingest.IngestMessage.MessageType;
 import org.sleuthkit.autopsy.ingest.IngestServices;
-import org.sleuthkit.autopsy.ingest.ModuleDataEvent;
 import org.sleuthkit.datamodel.Content;
 import org.sleuthkit.datamodel.Image;
 import org.sleuthkit.datamodel.TskCoreException;
 import org.openide.util.NbBundle;
 import org.sleuthkit.autopsy.casemodule.Case;
+import org.sleuthkit.datamodel.Blackboard;
 import org.sleuthkit.datamodel.BlackboardArtifact;
 import org.sleuthkit.datamodel.BlackboardAttribute;
 import org.sleuthkit.datamodel.TskDataException;
@@ -127,14 +127,10 @@ public class DataSourceIntegrityIngestModule implements DataSourceIngestModule {
         }
         Image img = (Image) dataSource;
 
-        // Make sure the image size we have is not zero
+        // Get the image size. Log a warning if it is zero.
         long size = img.getSize();
         if (size == 0) {
             logger.log(Level.WARNING, "Size of image {0} was 0 when queried.", imgName); //NON-NLS
-            services.postMessage(IngestMessage.createMessage(MessageType.ERROR, DataSourceIntegrityModuleFactory.getModuleName(),
-                    NbBundle.getMessage(this.getClass(),
-                            "DataSourceIntegrityIngestModule.process.errGetSizeOfImg",
-                            imgName)));
         }
         
         // Determine which mode we're in. 
@@ -301,11 +297,12 @@ public class DataSourceIntegrityIngestModule implements DataSourceIngestModule {
                     BlackboardArtifact verificationFailedArtifact = Case.getCurrentCase().getSleuthkitCase().newBlackboardArtifact(BlackboardArtifact.ARTIFACT_TYPE.TSK_VERIFICATION_FAILED, img.getId());
                     verificationFailedArtifact.addAttribute(new BlackboardAttribute(BlackboardAttribute.ATTRIBUTE_TYPE.TSK_COMMENT,
                         DataSourceIntegrityModuleFactory.getModuleName(), artifactComment));
-                    IngestServices.getInstance().fireModuleDataEvent(new ModuleDataEvent(DataSourceIntegrityModuleFactory.getModuleName(),
-                        BlackboardArtifact.ARTIFACT_TYPE.TSK_VERIFICATION_FAILED));
+                    Case.getCurrentCase().getServices().getArtifactsBlackboard().postArtifact(verificationFailedArtifact, DataSourceIntegrityModuleFactory.getModuleName());
                 } catch (TskCoreException ex) {
                     logger.log(Level.SEVERE, "Error creating verification failed artifact", ex);
-                }
+                } catch (Blackboard.BlackboardException ex) {
+                    logger.log(Level.SEVERE, "Error posting verification failed artifact", ex);
+                } 
             }
 
             services.postMessage(IngestMessage.createMessage(messageType, DataSourceIntegrityModuleFactory.getModuleName(), 

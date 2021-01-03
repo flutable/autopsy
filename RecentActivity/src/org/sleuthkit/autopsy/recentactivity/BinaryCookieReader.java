@@ -32,16 +32,17 @@ import org.sleuthkit.autopsy.coreutils.Logger;
 import org.sleuthkit.autopsy.recentactivity.BinaryCookieReader.Cookie;
 
 /**
- * The binary cookie reader encapsulates all the knowledge of how to read the mac
- * .binarycookie files into one class.
+ * The binary cookie reader encapsulates all the knowledge of how to read the
+ * mac .binarycookie files into one class.
  *
  * The binarycookie file has a header which describes how many pages of cookies
  * and where they are located. Each cookie page has a header and a list of
  * cookies.
  *
  */
-public final class BinaryCookieReader implements Iterable<Cookie> {
+final class BinaryCookieReader implements Iterable<Cookie> {
 
+    private static final Logger LOG = Logger.getLogger(BinaryCookieReader.class.getName());
     private static final int MAGIC_SIZE = 4;
     private static final int SIZEOF_INT_BYTES = 4;
     private static final int PAGE_HEADER_VALUE = 256;
@@ -53,16 +54,14 @@ public final class BinaryCookieReader implements Iterable<Cookie> {
     private final int[] pageSizeArray;
     private final File cookieFile;
 
-    private static final Logger LOG = Logger.getLogger(BinaryCookieReader.class.getName());
-
     /**
-     * The binary cookie reader encapsulates all the knowledge of how to read the mac
-     * .binarycookie files into one class.
+     * The binary cookie reader encapsulates all the knowledge of how to read
+     * the mac .binarycookie files into one class.
      *
      */
     private BinaryCookieReader(File cookieFile, int[] pageSizeArray) {
         this.cookieFile = cookieFile;
-        this.pageSizeArray = pageSizeArray;
+        this.pageSizeArray = pageSizeArray.clone();
     }
 
     /**
@@ -70,8 +69,10 @@ public final class BinaryCookieReader implements Iterable<Cookie> {
      * the file is a binarycookie file. This function does not keep the file
      * open.
      *
-     * @param file binarycookie file
+     * @param cookieFile binarycookie file
+     *
      * @return An instance of the reader
+     *
      * @throws FileNotFoundException
      * @throws IOException
      */
@@ -88,7 +89,7 @@ public final class BinaryCookieReader implements Iterable<Cookie> {
                 throw new IOException(cookieFile.getName() + " is not a cookie file"); //NON-NLS
             }
 
-            int[] sizeArray = null;
+            int[] sizeArray;
             int pageCount = dataStream.readInt();
             if (pageCount != 0) {
                 sizeArray = new int[pageCount];
@@ -96,8 +97,9 @@ public final class BinaryCookieReader implements Iterable<Cookie> {
                 for (int cnt = 0; cnt < pageCount; cnt++) {
                     sizeArray[cnt] = dataStream.readInt();
                 }
-                
+            } else {
                 LOG.log(Level.INFO, "No cookies found in {0}", cookieFile.getName()); //NON-NLS
+                sizeArray = new int[0];
             }
 
             reader = new BinaryCookieReader(cookieFile, sizeArray);
@@ -130,16 +132,16 @@ public final class BinaryCookieReader implements Iterable<Cookie> {
          * The cookiePageIterator iterates the binarycookie file by page.
          */
         CookiePageIterator() {
-            if(pageSizeArray == null || pageSizeArray.length == 0) {
+            if (pageSizeArray == null || pageSizeArray.length == 0) {
                 return;
             }
-            
+
             try {
                 dataStream = new DataInputStream(new FileInputStream(cookieFile));
                 // skip to the first page
                 dataStream.skipBytes((2 * SIZEOF_INT_BYTES) + (pageSizeArray.length * SIZEOF_INT_BYTES));
             } catch (IOException ex) {
-                
+
                 String errorMessage = String.format("An error occurred creating an input stream for %s", cookieFile.getName());
                 LOG.log(Level.WARNING, errorMessage, ex); //NON-NLS
                 closeStream(); // Just incase the error was from skip
@@ -147,7 +149,7 @@ public final class BinaryCookieReader implements Iterable<Cookie> {
         }
 
         /**
-         * Returns true if there are more cookies in the binarycookie file.  
+         * Returns true if there are more cookies in the binarycookie file.
          *
          * @return True if there are more cookies
          */
@@ -157,7 +159,7 @@ public final class BinaryCookieReader implements Iterable<Cookie> {
             if (dataStream == null) {
                 return false;
             }
-            
+
             if (currentIterator == null || !currentIterator.hasNext()) {
                 try {
 
@@ -229,6 +231,7 @@ public final class BinaryCookieReader implements Iterable<Cookie> {
          * correct format by checking for the header value of 0x0100.
          *
          * @param page byte array representing a cookie page
+         *
          * @throws IOException
          */
         CookiePage(byte[] page) throws IOException {
@@ -360,7 +363,7 @@ public final class BinaryCookieReader implements Iterable<Cookie> {
          * @return Cookie expiration date in milliseconds with java epoch
          */
         public final Long getExpirationDate() {
-            return ((long)expirationDate) + MAC_EPOC_FIX;
+            return ((long) expirationDate) + MAC_EPOC_FIX;
         }
 
         /**
@@ -370,7 +373,7 @@ public final class BinaryCookieReader implements Iterable<Cookie> {
          * @return Cookie creation date in milliseconds with java epoch
          */
         public final Long getCreationDate() {
-            return ((long)creationDate) + MAC_EPOC_FIX;
+            return ((long) creationDate) + MAC_EPOC_FIX;
         }
 
         /**
@@ -414,7 +417,8 @@ public final class BinaryCookieReader implements Iterable<Cookie> {
          * offset ending at the first null terminator found.
          *
          * @param byteArray Array of bytes
-         * @param offset starting offset in the array
+         * @param offset    starting offset in the array
+         *
          * @return String with bytes converted to ascii
          */
         private String decodeString(byte[] byteArray, int offset) {

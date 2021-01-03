@@ -32,6 +32,7 @@ import org.sleuthkit.autopsy.actions.AddContentTagAction;
 import org.sleuthkit.autopsy.actions.DeleteFileContentTagAction;
 import org.sleuthkit.autopsy.coreutils.ContextMenuExtensionPoint;
 import org.sleuthkit.autopsy.coreutils.Logger;
+import org.sleuthkit.autopsy.directorytree.ExportCSVAction;
 import org.sleuthkit.autopsy.directorytree.ExternalViewerAction;
 import org.sleuthkit.autopsy.directorytree.ExternalViewerShortcutAction;
 import org.sleuthkit.autopsy.directorytree.ExtractAction;
@@ -127,7 +128,7 @@ public class FileNode extends AbstractFsContentNode<AbstractFile> {
     private void setIcon(AbstractFile file) {
         if (file.isDirNameFlagSet(TSK_FS_NAME_FLAG_ENUM.UNALLOC)) {
             if (file.getType().equals(TSK_DB_FILES_TYPE_ENUM.CARVED)) {
-                this.setIconBaseWithExtension("org/sleuthkit/autopsy/images/carved-file-icon-16.png"); //NON-NLS
+                this.setIconBaseWithExtension("org/sleuthkit/autopsy/images/carved-file-x-icon-16.png"); //NON-NLS
             } else {
                 this.setIconBaseWithExtension("org/sleuthkit/autopsy/images/file-icon-deleted.png"); //NON-NLS
             }
@@ -173,6 +174,7 @@ public class FileNode extends AbstractFsContentNode<AbstractFile> {
         actionsList.add(null); // Creates an item separator
 
         actionsList.add(ExtractAction.getInstance());
+        actionsList.add(ExportCSVAction.getInstance());
         actionsList.add(null); // Creates an item separator
 
         actionsList.add(AddContentTagAction.getInstance());

@@ -1,7 +1,7 @@
 /*
  * Autopsy Forensic Browser
  *
- * Copyright 2011-2018 Basis Technology Corp.
+ * Copyright 2011-2020 Basis Technology Corp.
  * Contact: carrier <at> sleuthkit <dot> org
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -18,6 +18,7 @@
  */
 package org.sleuthkit.autopsy.modules.filetypeid;
 
+import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -29,6 +30,7 @@ import org.apache.tika.Tika;
 import org.apache.tika.io.TikaInputStream;
 import org.apache.tika.mime.MimeTypes;
 import org.sleuthkit.autopsy.coreutils.Logger;
+import org.sleuthkit.autopsy.coreutils.textutils.EncodingUtils;
 import org.sleuthkit.datamodel.AbstractFile;
 import org.sleuthkit.datamodel.ReadContentInputStream;
 import org.sleuthkit.datamodel.TskCoreException;
@@ -58,7 +60,7 @@ public class FileTypeDetector {
      * @return A list of all detectable file types.
      *
      * @throws FileTypeDetectorInitException If an error occurs while assembling
-     * the list of types
+     *                                       the list of types
      */
     public static synchronized SortedSet<String> getDetectedTypes() throws FileTypeDetectorInitException {
         TreeSet<String> detectedTypes = new TreeSet<>((String string1, String string2) -> {
@@ -109,7 +111,9 @@ public class FileTypeDetector {
      * Tika, and Autopsy file type definitions take precendence over Tika.
      *
      * @throws FileTypeDetectorInitException If an initialization error occurs,
-     * e.g., user-defined file type definitions exist but cannot be loaded.
+     *                                       e.g., user-defined file type
+     *                                       definitions exist but cannot be
+     *                                       loaded.
      */
     public FileTypeDetector() throws FileTypeDetectorInitException {
         try {
@@ -139,7 +143,7 @@ public class FileTypeDetector {
      * user-defined MIME type by this detector.
      *
      * @param customTypes
-     * @param mimeType The MIME type name (e.g., "text/html").
+     * @param mimeType    The MIME type name (e.g., "text/html").
      *
      * @return True or false.
      */
@@ -170,7 +174,7 @@ public class FileTypeDetector {
      * @param file The file to test.
      *
      * @return A MIME type name. If file type could not be detected, or results
-     * were uncertain, octet-stream is returned.
+     *         were uncertain, octet-stream is returned.
      *
      *
      */
@@ -223,7 +227,7 @@ public class FileTypeDetector {
             ReadContentInputStream stream = new ReadContentInputStream(file);
 
             try (TikaInputStream tikaInputStream = TikaInputStream.get(stream)) {
-                String tikaType = tika.detect(tikaInputStream, file.getName());
+                String tikaType = tika.detect(tikaInputStream);
 
                 /*
                  * Remove the Tika suffix from the MIME type name.
@@ -233,6 +237,32 @@ public class FileTypeDetector {
                  * Remove the optional parameter from the MIME type.
                  */
                 mimeType = removeOptionalParameter(mimeType);
+                
+                /*
+                 * If Tika recognizes the file signature, then use the file 
+                 * name to refine the type. In short, this is to exclude the 
+                 * mime types that are determined solely by file extension.
+                 * More details in JIRA-4871.
+                 */
+                if (!mimeType.equals(MimeTypes.OCTET_STREAM)) {
+                    ReadContentInputStream secondPassStream = new ReadContentInputStream(file);
+                    try (TikaInputStream secondPassTikaStream = TikaInputStream.get(secondPassStream)) {
+                        tikaType = tika.detect(secondPassTikaStream, file.getName());
+                        mimeType = tikaType.replace("tika-", ""); //NON-NLS
+                        mimeType = removeOptionalParameter(mimeType);
+                    }
+                } else {
+                    /*
+                     * If the file was marked as an octet stream and the extension is .txt, try to detect a text
+                     * encoding 
+                     */
+                    if (file.getNameExtension().equals("txt")) {
+                        Charset detectedCharset = EncodingUtils.getEncoding(file);
+                        if (detectedCharset != EncodingUtils.UNKNOWN_CHARSET) {
+                            mimeType = MimeTypes.PLAIN_TEXT;
+                        }
+                    }
+                }
 
                 /**
                  * We cannot trust Tika's audio/mpeg mimetype. Lets verify the
@@ -275,6 +305,7 @@ public class FileTypeDetector {
      * first 4 bits.
      *
      * @param x byte
+     *
      * @return Flag indicating the byte if 0xFF
      */
     private boolean byteIs0xFF(byte x) {
@@ -284,9 +315,10 @@ public class FileTypeDetector {
     /**
      * Retrieves the first N bytes from a file.
      *
-     * @param file Abstract file to read
+     * @param file   Abstract file to read
      * @param offset Offset to begin reading
-     * @param n Number of bytes to read
+     * @param n      Number of bytes to read
+     *
      * @return Byte array of size n
      *
      * @throws TskCoreException
@@ -371,7 +403,7 @@ public class FileTypeDetector {
          * Constructs an exception to throw if an initialization error occurs,
          * e.g., user-defined file type definitions exist but cannot be loaded.
          *
-         * @param message The exception message,
+         * @param message   The exception message,
          * @param throwable The underlying cause of the exception.
          */
         FileTypeDetectorInitException(String message, Throwable throwable) {
@@ -409,7 +441,7 @@ public class FileTypeDetector {
      * @return A MIME type name.
      *
      * @throws TskCoreException if detection is required and there is a problem
-     * writing the result to the case database.
+     *                          writing the result to the case database.
      * @deprecated Use getMIMEType instead, and call AbstractFile.setMIMEType
      * and AbstractFile.save to save the result to the file object and the
      * database.
@@ -429,10 +461,10 @@ public class FileTypeDetector {
      * @param file The file.
      *
      * @return A MIME type name. If file type could not be detected or results
-     * were uncertain, octet-stream is returned.
+     *         were uncertain, octet-stream is returned.
      *
      * @throws TskCoreException if detection is required and there is a problem
-     * writing the result to the case database.
+     *                          writing the result to the case database.
      *
      * @deprecated Use getMIMEType instead, and call AbstractFile.setMIMEType
      * and AbstractFile.save to save the result to the file object and the
@@ -453,7 +485,7 @@ public class FileTypeDetector {
      * @param file The file to test.
      *
      * @return A MIME type name. If file type could not be detected or results
-     * were uncertain, octet-stream is returned.
+     *         were uncertain, octet-stream is returned.
      *
      * @throws TskCoreException
      * @deprecated Use getMIMEType instead.

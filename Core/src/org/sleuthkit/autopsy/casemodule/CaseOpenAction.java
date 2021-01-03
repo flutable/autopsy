@@ -18,13 +18,13 @@
  */
 package org.sleuthkit.autopsy.casemodule;
 
+import java.awt.Component;
 import java.awt.Cursor;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
 import java.io.File;
 import java.util.concurrent.ExecutionException;
 import java.util.logging.Level;
-import javax.swing.JDialog;
 import javax.swing.JFileChooser;
 import javax.swing.JOptionPane;
 import javax.swing.SwingWorker;
@@ -62,8 +62,6 @@ public final class CaseOpenAction extends CallableSystemAction implements Action
     private static final String DISPLAY_NAME = Bundle.CTL_CaseOpenAction();
     private static final String PROP_BASECASE = "LBL_BaseCase_PATH"; //NON-NLS
     private static final Logger LOGGER = Logger.getLogger(CaseOpenAction.class.getName());
-    private static JDialog multiUserCaseWindow;
-    private final JFileChooser fileChooser = new JFileChooser();
     private final FileFilter caseMetadataFileFilter;
 
     /**
@@ -74,13 +72,6 @@ public final class CaseOpenAction extends CallableSystemAction implements Action
      */
     public CaseOpenAction() {
         caseMetadataFileFilter = new FileNameExtensionFilter(NbBundle.getMessage(CaseOpenAction.class, "CaseOpenAction.autFilter.title", Version.getName(), CaseMetadata.getFileExtension()), CaseMetadata.getFileExtension().substring(1));
-        fileChooser.setDragEnabled(false);
-        fileChooser.setFileSelectionMode(JFileChooser.FILES_ONLY);
-        fileChooser.setMultiSelectionEnabled(false);
-        fileChooser.setFileFilter(caseMetadataFileFilter);
-        if (null != ModuleSettings.getConfigSetting(ModuleSettings.MAIN_SETTINGS, PROP_BASECASE)) {
-            fileChooser.setCurrentDirectory(new File(ModuleSettings.getConfigSetting("Case", PROP_BASECASE))); //NON-NLS
-        }
     }
 
     /**
@@ -88,7 +79,23 @@ public final class CaseOpenAction extends CallableSystemAction implements Action
      * metadata file (.aut file). Upon confirming the selection, it will attempt
      * to open the case described by the file.
      */
-    void openCaseSelectionWindow() {
+    void openCaseSelectionWindow() {        
+        JFileChooser fileChooser = new JFileChooser();
+        fileChooser.setDragEnabled(false);
+        fileChooser.setFileSelectionMode(JFileChooser.FILES_ONLY);
+        fileChooser.setMultiSelectionEnabled(false);
+        fileChooser.setFileFilter(caseMetadataFileFilter);
+
+        if (null != ModuleSettings.getConfigSetting(ModuleSettings.MAIN_SETTINGS, PROP_BASECASE)) {
+            fileChooser.setCurrentDirectory(new File(ModuleSettings.getConfigSetting("Case", PROP_BASECASE))); //NON-NLS
+        }
+
+        /**
+         * If the open multi user case dialog is open make sure it's not set
+         * to always be on top as this hides the file chooser on macOS.
+         */
+        OpenMultiUserCaseDialog multiUserCaseDialog = OpenMultiUserCaseDialog.getInstance();
+        multiUserCaseDialog.setAlwaysOnTop(false);
         String optionsDlgTitle = NbBundle.getMessage(Case.class, "CloseCaseWhileIngesting.Warning.title");
         String optionsDlgMessage = NbBundle.getMessage(Case.class, "CloseCaseWhileIngesting.Warning");
         if (IngestRunningCheck.checkAndConfirmProceed(optionsDlgTitle, optionsDlgMessage)) {
@@ -96,7 +103,12 @@ public final class CaseOpenAction extends CallableSystemAction implements Action
              * Pop up a file chooser to allow the user to select a case metadata
              * file (.aut file).
              */
-            int retval = fileChooser.showOpenDialog(WindowManager.getDefault().getMainWindow());
+            /**
+             * The parent of the fileChooser will either be the multi user
+             * case dialog or the startup window.
+             */
+            int retval = fileChooser.showOpenDialog(multiUserCaseDialog.isVisible()
+                    ? multiUserCaseDialog : (Component) StartupWindowProvider.getInstance().getStartupWindow());
             if (retval == JFileChooser.APPROVE_OPTION) {
                 /*
                  * Close the startup window, if it is open.
@@ -106,9 +118,7 @@ public final class CaseOpenAction extends CallableSystemAction implements Action
                 /*
                  * Close the Open Multi-User Case window, if it is open.
                  */
-                if (multiUserCaseWindow != null) {
-                    multiUserCaseWindow.setVisible(false);
-                }
+                multiUserCaseDialog.setVisible(false);
 
                 /*
                  * Try to open the case associated with the case metadata file
@@ -160,10 +170,10 @@ public final class CaseOpenAction extends CallableSystemAction implements Action
         if (UserPreferences.getIsMultiUserModeEnabled()) {
             WindowManager.getDefault().getMainWindow().setCursor(Cursor.getPredefinedCursor(Cursor.WAIT_CURSOR));
 
-            if (multiUserCaseWindow == null) {
-                multiUserCaseWindow = OpenMultiUserCaseDialog.getInstance();
-            }
+            OpenMultiUserCaseDialog multiUserCaseWindow = OpenMultiUserCaseDialog.getInstance();
             multiUserCaseWindow.setLocationRelativeTo(WindowManager.getDefault().getMainWindow());
+            // Workaround to ensure that dialog is not hidden on macOS.
+            multiUserCaseWindow.setAlwaysOnTop(true);
             multiUserCaseWindow.setVisible(true);
 
             WindowManager.getDefault().getMainWindow().setCursor(null);

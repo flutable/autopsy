@@ -33,7 +33,7 @@ import javax.annotation.concurrent.Immutable;
 import javax.annotation.concurrent.ThreadSafe;
 import org.sleuthkit.autopsy.corecomponentinterfaces.DataSourceProcessor;
 import org.sleuthkit.autopsy.coreutils.NetworkUtils;
-import org.sleuthkit.autopsy.ingest.DataSourceIngestJob.Snapshot;
+import org.sleuthkit.autopsy.ingest.Snapshot;
 import org.sleuthkit.autopsy.ingest.IngestJob;
 import org.sleuthkit.autopsy.ingest.IngestManager.IngestThreadActivitySnapshot;
 import org.sleuthkit.autopsy.ingest.IngestProgressSnapshotProvider;
@@ -193,6 +193,7 @@ final class AutoIngestJob implements Comparable<AutoIngestJob>, IngestProgressSn
             this.ingestThreadsSnapshot = Collections.emptyList();
             this.ingestJobsSnapshot = Collections.emptyList();
             this.moduleRunTimesSnapshot = Collections.emptyMap();
+            
         } catch (Exception ex) {
             throw new AutoIngestJobException(String.format("Error creating automated ingest job"), ex);
         }
@@ -651,7 +652,7 @@ final class AutoIngestJob implements Comparable<AutoIngestJob>, IngestProgressSn
         PENDING,
         PROCESSING,
         COMPLETED,
-        DELETED
+        DELETED // No longer used, retained for legacy jobs only.
     }
 
     /**

@@ -1,7 +1,7 @@
 /*
  * Autopsy Forensic Browser
  *
- * Copyright 2011-2019 Basis Technology Corp.
+ * Copyright 2012-2020 Basis Technology Corp.
  * Contact: carrier <at> sleuthkit <dot> org
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,7 +26,6 @@ import java.beans.PropertyVetoException;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.EnumSet;
 import java.util.LinkedList;
 import java.util.List;
@@ -47,6 +46,7 @@ import javax.swing.tree.TreeSelectionModel;
 import org.apache.commons.lang3.StringUtils;
 import org.openide.explorer.ExplorerManager;
 import org.openide.explorer.ExplorerUtils;
+import org.openide.explorer.view.BeanTreeView;
 import org.openide.explorer.view.Visualizer;
 import org.openide.nodes.AbstractNode;
 import org.openide.nodes.Children;
@@ -85,7 +85,6 @@ import org.sleuthkit.autopsy.datamodel.Tags;
 import org.sleuthkit.autopsy.datamodel.ViewsNode;
 import org.sleuthkit.autopsy.datamodel.accounts.Accounts;
 import org.sleuthkit.autopsy.datamodel.accounts.BINRange;
-import org.sleuthkit.autopsy.ingest.IngestManager;
 import org.sleuthkit.datamodel.Account;
 import org.sleuthkit.datamodel.BlackboardArtifact;
 import org.sleuthkit.datamodel.BlackboardAttribute;
@@ -128,7 +127,7 @@ public final class DirectoryTreeTopComponent extends TopComponent implements Dat
         getTree().setSelectionMode(TreeSelectionModel.SINGLE_TREE_SELECTION);
         //Hook into the JTree and pre-expand the Views Node and Results node when a user
         //expands an item in the tree that makes these nodes visible.
-        getTree().addTreeExpansionListener(new TreeExpansionListener() {
+        ((ExpansionBeanTreeView) getTree()).addTreeExpansionListener(new TreeExpansionListener() {
             @Override
             public void treeExpanded(TreeExpansionEvent event) {
                 //Bail immediately if we are not in the Group By view.
@@ -192,7 +191,7 @@ public final class DirectoryTreeTopComponent extends TopComponent implements Dat
      * @param rootChildren Children node containing Results node and Views node.
      */
     private void preExpandNodes(Children rootChildren) {
-        ExpansionBeanTreeView tree = getTree();
+        BeanTreeView tree = getTree();
 
         Node results = rootChildren.findChild(ResultsNode.NAME);
         if (!Objects.isNull(results)) {
@@ -219,9 +218,10 @@ public final class DirectoryTreeTopComponent extends TopComponent implements Dat
                     case UserPreferences.TIME_ZONE_FOR_DISPLAYS:
                     case UserPreferences.HIDE_KNOWN_FILES_IN_DATA_SRCS_TREE:
                     case UserPreferences.HIDE_SLACK_FILES_IN_DATA_SRCS_TREE:
-                    case UserPreferences.HIDE_CENTRAL_REPO_COMMENTS_AND_OCCURRENCES:
+                    case UserPreferences.HIDE_SCO_COLUMNS:
                     case UserPreferences.DISPLAY_TRANSLATED_NAMES:
                     case UserPreferences.KEEP_PREFERRED_VIEWER:
+                    case UserPreferences.TEXT_TRANSLATOR_NAME:
                         refreshContentTreeSafe();
                         break;
                     case UserPreferences.SHOW_ONLY_CURRENT_USER_TAGS:
@@ -238,8 +238,6 @@ public final class DirectoryTreeTopComponent extends TopComponent implements Dat
 
         Case.addEventTypeSubscriber(EnumSet.of(Case.Events.CURRENT_CASE, Case.Events.DATA_SOURCE_ADDED), this);
         this.em.addPropertyChangeListener(this);
-        IngestManager.getInstance().addIngestJobEventListener(this);
-        IngestManager.getInstance().addIngestModuleEventListener(this);
     }
 
     public void setDirectoryListingActive() {
@@ -799,10 +797,7 @@ public final class DirectoryTreeTopComponent extends TopComponent implements Dat
             } // change in node selection
             else if (changed.equals(ExplorerManager.PROP_SELECTED_NODES)) {
                 respondSelection((Node[]) event.getOldValue(), (Node[]) event.getNewValue());
-            } else if (changed.equals(IngestManager.IngestModuleEvent.DATA_ADDED.toString())) {
-                // nothing to do here.
-                // all nodes should be listening for these events and update accordingly.
-            }
+            } 
         }
     }
 
@@ -930,8 +925,8 @@ public final class DirectoryTreeTopComponent extends TopComponent implements Dat
      *
      * @return tree the BeanTreeView
      */
-    public ExpansionBeanTreeView getTree() {
-        return (ExpansionBeanTreeView) this.treeView;
+    BeanTreeView getTree() {
+        return (BeanTreeView) this.treeView;
     }
 
     /**

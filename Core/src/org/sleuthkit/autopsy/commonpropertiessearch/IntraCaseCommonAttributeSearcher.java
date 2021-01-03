@@ -2,7 +2,7 @@
  *
  * Autopsy Forensic Browser
  *
- * Copyright 2018 Basis Technology Corp.
+ * Copyright 2018-2019 Basis Technology Corp.
  * Contact: carrier <at> sleuthkit <dot> org
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,7 +28,7 @@ import java.util.Map;
 import java.util.Set;
 import org.sleuthkit.autopsy.casemodule.Case;
 import org.sleuthkit.autopsy.casemodule.NoCurrentCaseException;
-import org.sleuthkit.autopsy.centralrepository.datamodel.EamDbException;
+import org.sleuthkit.autopsy.centralrepository.datamodel.CentralRepoException;
 import org.sleuthkit.datamodel.HashUtility;
 import org.sleuthkit.datamodel.SleuthkitCase;
 import org.sleuthkit.datamodel.SleuthkitCase.CaseDbQuery;
@@ -37,8 +37,8 @@ import org.sleuthkit.datamodel.TskCoreException;
 /**
  *
  * Generates a <code>List<CommonFilesMetadata></code> when
- * <code>findMatchesByCount()</code> is called, which organizes files by md5 to prepare
- * to display in viewer.
+ * <code>findMatchesByCount()</code> is called, which organizes files by md5 to
+ * prepare to display in viewer.
  *
  * This entire thing runs on a background thread where exceptions are handled.
  */
@@ -143,8 +143,8 @@ public abstract class IntraCaseCommonAttributeSearcher extends AbstractCommonAtt
     }
 
     @Override
-    public CommonAttributeCaseSearchResults findMatchesByCase() throws TskCoreException, NoCurrentCaseException, SQLException, EamDbException {
-        throw new EamDbException("Not Supported at the moment");
+    public CommonAttributeCaseSearchResults findMatchesByCase() throws TskCoreException, NoCurrentCaseException, SQLException, CentralRepoException {
+        throw new CentralRepoException("Not Supported at the moment");
     }
 
     /**

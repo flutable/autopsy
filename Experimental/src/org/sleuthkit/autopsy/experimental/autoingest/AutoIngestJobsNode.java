@@ -1,7 +1,7 @@
 /*
  * Autopsy Forensic Browser
  *
- * Copyright 2018 Basis Technology Corp.
+ * Copyright 2018-2019 Basis Technology Corp.
  * Contact: carrier <at> sleuthkit <dot> org
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -37,7 +37,7 @@ import org.sleuthkit.autopsy.datamodel.NodeProperty;
 import org.sleuthkit.autopsy.experimental.autoingest.AutoIngestJob.Stage;
 import org.sleuthkit.autopsy.guiutils.DurationCellRenderer;
 import org.sleuthkit.autopsy.guiutils.StatusIconCellRenderer;
-import org.sleuthkit.autopsy.ingest.DataSourceIngestJob;
+import org.sleuthkit.autopsy.ingest.Snapshot;
 
 /**
  * A node which represents all AutoIngestJobs of a given AutoIngestJobStatus.
@@ -96,7 +96,7 @@ final class AutoIngestJobsNode extends AbstractNode {
          * they can be changed by events in other threads which
          */
         private final Stage jobStage;
-        private final List<DataSourceIngestJob.Snapshot> jobSnapshot;
+        private final List<Snapshot> jobSnapshot;
         private final Integer jobPriority;
 
         AutoIngestJobWrapper(AutoIngestJob job) {
@@ -372,7 +372,6 @@ final class AutoIngestJobsNode extends AbstractNode {
                         break;
                     case COMPLETED_JOB:
                         actions.add(new AutoIngestAdminActions.ReprocessJobAction(jobWrapper.getJob()));
-                        actions.add(new AutoIngestAdminActions.DeleteCaseAction(jobWrapper.getJob()));
                         actions.add(new AutoIngestAdminActions.ShowCaseLogAction(jobWrapper.getJob()));
                         break;
                     default:

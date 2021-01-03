@@ -36,10 +36,9 @@ import org.apache.curator.retry.ExponentialBackoffRetry;
 import org.apache.zookeeper.CreateMode;
 import org.apache.zookeeper.KeeperException;
 import org.apache.zookeeper.KeeperException.NoNodeException;
-import org.apache.zookeeper.WatchedEvent;
 import org.apache.zookeeper.ZooDefs;
-import org.apache.zookeeper.ZooKeeper;
 import org.openide.util.Lookup;
+import org.sleuthkit.autopsy.coordinationservice.utils.CoordinationServiceUtils;
 import org.sleuthkit.autopsy.core.UserPreferences;
 
 /**
@@ -52,8 +51,6 @@ public final class CoordinationService {
 
     private static final int SESSION_TIMEOUT_MILLISECONDS = 300000;
     private static final int CONNECTION_TIMEOUT_MILLISECONDS = 300000;
-    private static final int ZOOKEEPER_SESSION_TIMEOUT_MILLIS = 3000;
-    private static final int ZOOKEEPER_CONNECTION_TIMEOUT_MILLIS = 15000;
     private static final int PORT_OFFSET = 1000; // When run in Solr, ZooKeeper defaults to Solr port + 1000
     private static final String DEFAULT_NAMESPACE_ROOT = "autopsy";
     @GuardedBy("CoordinationService.class")
@@ -61,37 +58,6 @@ public final class CoordinationService {
     private final CuratorFramework curator;
     @GuardedBy("categoryNodeToPath")
     private final Map<String, String> categoryNodeToPath;
-
-    /**
-     * Determines if ZooKeeper is accessible with the current settings. Closes
-     * the connection prior to returning.
-     *
-     * @return true if a connection was achieved, false otherwise
-     *
-     * @throws InterruptedException
-     * @throws IOException
-     */
-    private static boolean isZooKeeperAccessible() throws InterruptedException, IOException {
-        boolean result = false;
-        Object workerThreadWaitNotifyLock = new Object();
-        int zooKeeperServerPort = Integer.valueOf(UserPreferences.getIndexingServerPort()) + PORT_OFFSET;
-        String connectString = UserPreferences.getIndexingServerHost() + ":" + zooKeeperServerPort;
-        ZooKeeper zooKeeper = new ZooKeeper(connectString, ZOOKEEPER_SESSION_TIMEOUT_MILLIS,
-                (WatchedEvent event) -> {
-                    synchronized (workerThreadWaitNotifyLock) {
-                        workerThreadWaitNotifyLock.notify();
-                    }
-                });
-        synchronized (workerThreadWaitNotifyLock) {
-            workerThreadWaitNotifyLock.wait(ZOOKEEPER_CONNECTION_TIMEOUT_MILLIS);
-        }
-        ZooKeeper.States state = zooKeeper.getState();
-        if (state == ZooKeeper.States.CONNECTED || state == ZooKeeper.States.CONNECTEDREADONLY) {
-            result = true;
-        }
-        zooKeeper.close();
-        return result;
-    }
 
     /**
      * Gets the coordination service for maintaining configuration information
@@ -114,7 +80,16 @@ public final class CoordinationService {
             }
             try {
                 instance = new CoordinationService(rootNode);
-            } catch (IOException | InterruptedException | KeeperException | CoordinationServiceException ex) {
+            } catch (IOException | KeeperException | CoordinationServiceException ex) {
+                throw new CoordinationServiceException("Failed to create coordination service", ex);
+            } catch (InterruptedException ex) {
+                /*
+                 * The interrupted exception should be propagated to support
+                 * task cancellation. To avoid a public API change here, restore
+                 * the interrupted flag and then throw the InterruptedException
+                 * in its wrapper.
+                 */
+                Thread.currentThread().interrupt();
                 throw new CoordinationServiceException("Failed to create coordination service", ex);
             }
         }
@@ -132,16 +107,26 @@ public final class CoordinationService {
      */
     private CoordinationService(String rootNodeName) throws InterruptedException, IOException, KeeperException, CoordinationServiceException {
 
-        if (false == isZooKeeperAccessible()) {
+        // read ZK connection info
+        String hostName = UserPreferences.getZkServerHost();
+        String port = UserPreferences.getZkServerPort();
+        if (hostName.isEmpty() || port.isEmpty()) {
+            // use defaults for embedded ZK that runs on Solr server
+            hostName = UserPreferences.getIndexingServerHost();
+            int portInt = Integer.valueOf(UserPreferences.getIndexingServerPort()) + PORT_OFFSET;
+            port = Integer.toString(portInt);
+        }
+        if (false == CoordinationServiceUtils.isZooKeeperAccessible(hostName, port)) {
             throw new CoordinationServiceException("Unable to access ZooKeeper");
         }
-
+        
+        // We are using ZK for all coordination/locking, so ZK connection info cannot be changed.
+        // A reboot is required in order to use a different ZK server for coordination services.
         /*
          * Connect to ZooKeeper via Curator.
          */
         RetryPolicy retryPolicy = new ExponentialBackoffRetry(1000, 3);
-        int zooKeeperServerPort = Integer.valueOf(UserPreferences.getIndexingServerPort()) + PORT_OFFSET;
-        String connectString = UserPreferences.getIndexingServerHost() + ":" + zooKeeperServerPort;
+        String connectString = hostName + ":" + port;
         curator = CuratorFrameworkFactory.newClient(connectString, SESSION_TIMEOUT_MILLISECONDS, CONNECTION_TIMEOUT_MILLISECONDS, retryPolicy);
         curator.start();
 
@@ -363,15 +348,22 @@ public final class CoordinationService {
      * @param category The desired category in the namespace.
      * @param nodePath The node to be deleted.
      *
-     * @throws CoordinationServiceException If there is an error deleting the
-     *                                      node.
+     * @throws CoordinationServiceException   If there is an error deleting the
+     *                                        node.
+     * @throws java.lang.InterruptedException If a thread interrupt occurs while
+     *                                        blocked waiting for the operation
+     *                                        to complete.
      */
-    public void deleteNode(CategoryNode category, String nodePath) throws CoordinationServiceException {
+    public void deleteNode(CategoryNode category, String nodePath) throws CoordinationServiceException, InterruptedException {
         String fullNodePath = getFullyQualifiedNodePath(category, nodePath);
         try {
             curator.delete().forPath(fullNodePath);
         } catch (Exception ex) {
-            throw new CoordinationServiceException(String.format("Failed to delete node %s", fullNodePath), ex);
+            if (ex instanceof InterruptedException) {
+                throw (InterruptedException) ex;
+            } else {
+                throw new CoordinationServiceException(String.format("Failed to delete node %s", fullNodePath), ex);
+            }
         }
     }
 
@@ -382,15 +374,22 @@ public final class CoordinationService {
      *
      * @return A list of child node names.
      *
-     * @throws CoordinationServiceException If there is an error getting the
-     *                                      node list.
+     * @throws CoordinationServiceException   If there is an error getting the
+     *                                        node list.
+     * @throws java.lang.InterruptedException If a thread interrupt occurs while
+     *                                        blocked waiting for the operation
+     *                                        to complete.
      */
-    public List<String> getNodeList(CategoryNode category) throws CoordinationServiceException {
+    public List<String> getNodeList(CategoryNode category) throws CoordinationServiceException, InterruptedException {
         try {
             List<String> list = curator.getChildren().forPath(categoryNodeToPath.get(category.getDisplayName()));
             return list;
         } catch (Exception ex) {
-            throw new CoordinationServiceException(String.format("Failed to get node list for %s", category.getDisplayName()), ex);
+            if (ex instanceof InterruptedException) {
+                throw (InterruptedException) ex;
+            } else {
+                throw new CoordinationServiceException(String.format("Failed to get node list for %s", category.getDisplayName()), ex);
+            }
         }
     }
 
@@ -404,9 +403,9 @@ public final class CoordinationService {
      */
     private String getFullyQualifiedNodePath(CategoryNode category, String nodePath) {
         // nodePath on Unix systems starts with a "/" and ZooKeeper doesn't like two slashes in a row
-        if(nodePath.startsWith("/")){
+        if (nodePath.startsWith("/")) {
             return categoryNodeToPath.get(category.getDisplayName()) + nodePath.toUpperCase();
-        }else{
+        } else {
             return categoryNodeToPath.get(category.getDisplayName()) + "/" + nodePath.toUpperCase();
         }
     }

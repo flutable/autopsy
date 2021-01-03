@@ -28,23 +28,18 @@ import java.util.List;
 import java.util.Properties;
 import java.util.Set;
 import java.util.logging.Level;
-import org.apache.commons.lang3.StringUtils;
 import org.openide.util.NbBundle.Messages;
 import org.sleuthkit.autopsy.coreutils.Logger;
 import org.sleuthkit.autopsy.coreutils.NetworkUtils;
 import org.sleuthkit.autopsy.ingest.DataSourceIngestModuleProgress;
 import org.sleuthkit.autopsy.ingest.IngestJobContext;
-import org.sleuthkit.autopsy.ingest.IngestServices;
-import org.sleuthkit.autopsy.ingest.ModuleDataEvent;
 import org.sleuthkit.datamodel.AbstractFile;
 import org.sleuthkit.datamodel.BlackboardArtifact;
-import static org.sleuthkit.datamodel.BlackboardArtifact.ARTIFACT_TYPE.TSK_DOWNLOAD_SOURCE;
+import static org.sleuthkit.datamodel.BlackboardArtifact.ARTIFACT_TYPE.TSK_ASSOCIATED_OBJECT;
 import static org.sleuthkit.datamodel.BlackboardArtifact.ARTIFACT_TYPE.TSK_WEB_DOWNLOAD;
 import org.sleuthkit.datamodel.BlackboardAttribute;
-import static org.sleuthkit.datamodel.BlackboardAttribute.ATTRIBUTE_TYPE.TSK_DOMAIN;
-import static org.sleuthkit.datamodel.BlackboardAttribute.ATTRIBUTE_TYPE.TSK_LOCATION;
+import static org.sleuthkit.datamodel.BlackboardAttribute.ATTRIBUTE_TYPE.TSK_ASSOCIATED_ARTIFACT;
 import static org.sleuthkit.datamodel.BlackboardAttribute.ATTRIBUTE_TYPE.TSK_PATH_ID;
-import static org.sleuthkit.datamodel.BlackboardAttribute.ATTRIBUTE_TYPE.TSK_URL;
 import org.sleuthkit.datamodel.Content;
 import org.sleuthkit.datamodel.ReadContentInputStream;
 import org.sleuthkit.datamodel.TskCoreException;
@@ -96,12 +91,17 @@ final class ExtractZoneIdentifier extends Extract {
             return;
         }
 
-        Collection<BlackboardArtifact> sourceArtifacts = new ArrayList<>();
+        Collection<BlackboardArtifact> associatedObjectArtifacts = new ArrayList<>();
         Collection<BlackboardArtifact> downloadArtifacts = new ArrayList<>();
 
         for (AbstractFile zoneFile : zoneFiles) {
+            
+            if (context.dataSourceIngestIsCancelled()) {
+                return;
+            }
+            
             try {
-                processZoneFile(context, dataSource, zoneFile, sourceArtifacts, downloadArtifacts, knownPathIDs);
+                processZoneFile(context, dataSource, zoneFile, associatedObjectArtifacts, downloadArtifacts, knownPathIDs);
             } catch (TskCoreException ex) {
                 addErrorMessage(Bundle.ExtractZone_process_errMsg());
                 String message = String.format("Failed to process zone identifier file  %s", zoneFile.getName()); //NON-NLS
@@ -109,34 +109,23 @@ final class ExtractZoneIdentifier extends Extract {
             }
         }
 
-        IngestServices services = IngestServices.getInstance();
-
-        if (!sourceArtifacts.isEmpty()) {
-            services.fireModuleDataEvent(new ModuleDataEvent(
-                    RecentActivityExtracterModuleFactory.getModuleName(),
-                    TSK_DOWNLOAD_SOURCE, sourceArtifacts));
-        }
-
-        if (!downloadArtifacts.isEmpty()) {
-            services.fireModuleDataEvent(new ModuleDataEvent(
-                    RecentActivityExtracterModuleFactory.getModuleName(),
-                    TSK_WEB_DOWNLOAD, downloadArtifacts));
-        }
+        postArtifacts(associatedObjectArtifacts);
+        postArtifacts(downloadArtifacts);
     }
 
     /**
      * Process a single Zone Identifier file.
      *
-     * @param context           IngetJobContext
-     * @param dataSource        Content
-     * @param zoneFile          Zone Indentifier file
-     * @param sourceArtifacts   List for TSK_DOWNLOAD_SOURCE artifacts
-     * @param downloadArtifacts List for TSK_WEB_DOWNLOAD aritfacts
-     * 
+     * @param context IngestJobContext
+     * @param dataSource Content
+     * @param zoneFile Zone Indentifier file
+     * @param associatedObjectArtifacts List for TSK_ASSOCIATED_OBJECT artifacts
+     * @param downloadArtifacts List for TSK_WEB_DOWNLOAD artifacts
+     *
      * @throws TskCoreException
      */
     private void processZoneFile(IngestJobContext context, Content dataSource,
-            AbstractFile zoneFile, Collection<BlackboardArtifact> sourceArtifacts,
+            AbstractFile zoneFile, Collection<BlackboardArtifact> associatedObjectArtifacts,
             Collection<BlackboardArtifact> downloadArtifacts,
             Set<Long> knownPathIDs) throws TskCoreException {
 
@@ -160,24 +149,24 @@ final class ExtractZoneIdentifier extends Extract {
             if (!knownPathIDs.contains(downloadFile.getDataSourceObjectId())) {
                 // The zone identifier file is the parent of this artifact 
                 // because it is the file we parsed to get the data
-                BlackboardArtifact downloadBba = createDownloadArtifact(zoneFile, zoneInfo);
+                BlackboardArtifact downloadBba = createDownloadArtifact(zoneFile, zoneInfo, downloadFile);
                 if (downloadBba != null) {
                     downloadArtifacts.add(downloadBba);
+                    // create a TSK_ASSOCIATED_OBJECT for the downloaded file, associating it with the TSK_WEB_DOWNLOAD artifact.
+                    if (downloadFile.getArtifactsCount(TSK_ASSOCIATED_OBJECT) == 0) {
+                        BlackboardArtifact associatedObjectBba = createAssociatedObjectArtifact(downloadFile, downloadBba);
+                        if (associatedObjectBba != null) {
+                            associatedObjectArtifacts.add(associatedObjectBba);
+                        }
+                    }
                 }
             }
             
-            // check if download has a child TSK_DOWNLOAD_SOURCE artifact, if not create one
-            if (downloadFile.getArtifactsCount(TSK_DOWNLOAD_SOURCE) == 0) {
-                BlackboardArtifact sourceBba = createDownloadSourceArtifact(downloadFile, zoneInfo);
-                if (sourceBba != null) {
-                    sourceArtifacts.add(sourceBba);
-                }
-            }
         }
     }
 
     /**
-     * Find the file that the Zone.Identifer file was created alongside.
+     * Find the file that the Zone.Identifier file was created alongside.
      *
      * @param dataSource Content
      * @param zoneFile   The zone identifier case file
@@ -211,51 +200,52 @@ final class ExtractZoneIdentifier extends Extract {
     }
 
     /**
-     * Create a Download Source Artifact for the given ZoneIdentifierInfo
+     * Create a Associated Object Artifact for the given ZoneIdentifierInfo
      * object.
      *
      * @param downloadFile AbstractFile representing the file downloaded, not
-     *                     the zone indentifier file.
-     * @param zoneInfo     Zone Indentifer file wrapper object
+     * the zone identifier file.
+     * @param downloadBba TSK_WEB_DOWNLOAD artifact to associate with.
      *
-     * @return TSK_DOWNLOAD_SOURCE object for given parameters
+     * @return TSK_ASSOCIATED_OBJECT artifact.
      */
-    private BlackboardArtifact createDownloadSourceArtifact(AbstractFile downloadFile, ZoneIdentifierInfo zoneInfo) {
+    private BlackboardArtifact createAssociatedObjectArtifact(AbstractFile downloadFile, BlackboardArtifact downloadBba) {
 
         Collection<BlackboardAttribute> bbattributes = new ArrayList<>();
       
         bbattributes.addAll(Arrays.asList(
-                new BlackboardAttribute(TSK_URL,
-                RecentActivityExtracterModuleFactory.getModuleName(),
-                StringUtils.defaultString(zoneInfo.getURL(), "")),
-                
-                new BlackboardAttribute(TSK_DOMAIN,
-                RecentActivityExtracterModuleFactory.getModuleName(),
-                (zoneInfo.getURL() != null) ? NetworkUtils.extractDomain(zoneInfo.getURL()) : ""),
-                
-                new BlackboardAttribute(TSK_LOCATION,
-                RecentActivityExtracterModuleFactory.getModuleName(),
-                StringUtils.defaultString(zoneInfo.getZoneIdAsString(), "")))); //NON-NLS
+                new BlackboardAttribute(TSK_ASSOCIATED_ARTIFACT,
+                        RecentActivityExtracterModuleFactory.getModuleName(),
+                        downloadBba.getArtifactID())
+                            ));
 
-        return addArtifact(TSK_DOWNLOAD_SOURCE, downloadFile, bbattributes);
+        return createArtifactWithAttributes(TSK_ASSOCIATED_OBJECT, downloadFile, bbattributes);
     }
 
     /**
-     * Create a TSK_WEB_DOWNLOAD Artifact for the given zone indentifier file.
+     * Create a TSK_WEB_DOWNLOAD Artifact for the given zone identifier file.
      *
      * @param zoneFile Zone identifier file
      * @param zoneInfo ZoneIdentifierInfo file wrapper object
+     * @param downloadFile The file associated with the zone identifier
      *
      * @return BlackboardArifact for the given parameters
      */
-    private BlackboardArtifact createDownloadArtifact(AbstractFile zoneFile, ZoneIdentifierInfo zoneInfo) {
+    private BlackboardArtifact createDownloadArtifact(AbstractFile zoneFile, ZoneIdentifierInfo zoneInfo, AbstractFile downloadFile) {
 
+        String downloadFilePath = downloadFile.getParentPath() + downloadFile.getName();
+        
         Collection<BlackboardAttribute> bbattributes = createDownloadAttributes(
-                null, null,
+                downloadFilePath, null,
                 zoneInfo.getURL(), null,
                 (zoneInfo.getURL() != null ? NetworkUtils.extractDomain(zoneInfo.getURL()) : ""),
                 null);
-        return addArtifact(TSK_WEB_DOWNLOAD, zoneFile, bbattributes);
+        if (zoneInfo.getZoneIdAsString() != null) {
+            bbattributes.add(new BlackboardAttribute(BlackboardAttribute.ATTRIBUTE_TYPE.TSK_COMMENT,
+                        RecentActivityExtracterModuleFactory.getModuleName(),
+                        zoneInfo.getZoneIdAsString()));
+        }
+        return createArtifactWithAttributes(TSK_WEB_DOWNLOAD, zoneFile, bbattributes);
     }
 
     /**
@@ -292,7 +282,7 @@ final class ExtractZoneIdentifier extends Extract {
 
     /**
      * Wrapper class for information in the :ZoneIdentifier file. The
-     * Zone.Identifier file has a simple format of <i>key<i>=<i>value<i>. There
+     * Zone.Identifier file has a simple format of \<i\>key\<i\>=\<i\>value\<i\>. There
      * are four known keys: ZoneId, ReferrerUrl, HostUrl, and
      * LastWriterPackageFamilyName. Not all browsers will put all values in the
      * file, in fact most will only supply the ZoneId. Only Edge supplies the

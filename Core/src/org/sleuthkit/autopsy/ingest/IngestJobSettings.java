@@ -41,6 +41,7 @@ import org.sleuthkit.autopsy.coreutils.ModuleSettings;
 import org.sleuthkit.autopsy.coreutils.PlatformUtil;
 import org.sleuthkit.autopsy.modules.interestingitems.FilesSet;
 import org.sleuthkit.autopsy.modules.interestingitems.FilesSetsManager;
+import org.sleuthkit.autopsy.python.FactoryClassNameNormalizer;
 
 /**
  * The settings for an ingest job.
@@ -329,14 +330,38 @@ public final class IngestJobSettings {
         for (IngestModuleFactory moduleFactory : moduleFactories) {
             loadedModuleNames.add(moduleFactory.getModuleDisplayName());
         }
+        
+        /**
+         * Hard coding Plaso to be disabled by default. loadedModuleNames is
+         * passed below as the default list of enabled modules so briefly remove
+         * Plaso from loaded modules to get the list of enabled and disabled
+         * modules names. Then put Plaso back into loadedModulesNames to let the
+         * rest of the code continue as before.
+         */
+        final String plasoModuleName = "Plaso";
+        boolean plasoLoaded = loadedModuleNames.contains(plasoModuleName);
+        if (plasoLoaded) {
+            loadedModuleNames.remove(plasoModuleName);
+        }
 
         /**
          * Get the enabled/disabled ingest modules settings for this context. By
-         * default, all loaded modules are enabled.
+         * default, all loaded modules except Plaso are enabled.
          */
         HashSet<String> enabledModuleNames = getModulesNames(executionContext, IngestJobSettings.ENABLED_MODULES_PROPERTY, makeCsvList(loadedModuleNames));
-        HashSet<String> disabledModuleNames = getModulesNames(executionContext, IngestJobSettings.DISABLED_MODULES_PROPERTY, ""); //NON-NLS
+        HashSet<String> disabledModuleNames = getModulesNames(executionContext, IngestJobSettings.DISABLED_MODULES_PROPERTY, plasoModuleName); //NON-NLS
 
+        // If plaso was loaded, but appears in neither the enabled nor the 
+        // disabled list, add it to the disabled list.
+        if (!enabledModuleNames.contains(plasoModuleName) && !disabledModuleNames.contains(plasoModuleName)) {
+            disabledModuleNames.add(plasoModuleName);
+        }
+
+        //Put plaso back into loadedModuleNames
+        if (plasoLoaded) {
+            loadedModuleNames.add(plasoModuleName);
+        }
+        
         /**
          * Check for missing modules and create warnings if any are found.
          */
@@ -445,6 +470,12 @@ public final class IngestJobSettings {
                         break;
                     case "Archive Extractor": //NON-NLS
                         moduleNames.add("Embedded File Extractor"); //NON-NLS
+                        break;
+                    case "Correlation Engine": //NON-NLS
+                        moduleNames.add("Central Repository"); //NON-NLS
+                        break;
+                    case "Exif Parser": //NON-NLS
+                        moduleNames.add("Picture Analyzer"); //NON-NLS
                         break;
                     default:
                         moduleNames.add(name);
